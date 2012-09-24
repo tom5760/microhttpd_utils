@@ -87,31 +87,46 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    struct MHDU_Router *router = NULL;
+    struct MHD_Daemon *daemon = NULL;
+
     wait_fd = eventfd(0, 0);
+
+    if (wait_fd == -1) {
+        MHDU_ERR("Failed to create eventfd.");
+        return 1;
+    }
 
     struct pollfd poll_fds[] = {{
         .fd = wait_fd,
         .events = POLLIN,
     }};
 
-    struct MHDU_Router *router = MHDU_create_router();
+    router = MHDU_create_router();
+    if (router == NULL) {
+        goto done;
+    }
 
-    if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET, &handler1, NULL)
-            != MHD_YES) {
+    if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET, &handler1,
+                       NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
-    struct MHD_Daemon *daemon = MHDU_start_daemon(
+    daemon = MHDU_start_daemon(
             MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG,
             DEFAULT_PORT, router);
+    if (daemon == NULL) {
+        goto done;
+    }
+
     printf("Server started on port %d\n", DEFAULT_PORT);
 
     while (1) {
         int num_events = poll(poll_fds, 1, -1);
         if (num_events < 0 && errno != EINTR) {
             MHDU_ERR("Failed to poll");
-            goto done;
+            break;
         }
         if (poll_fds[0].revents & POLLIN) {
             break;
