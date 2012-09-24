@@ -112,8 +112,8 @@ void MHDU_destroy_router(struct MHDU_Router *router) {
     struct route *route;
     struct route *tmp;
     LL_FOREACH_SAFE(router->routes, route, tmp) {
-        destroy_route(route);
         LL_DELETE(router->routes, route);
+        destroy_route(route);
     }
 
     free(router);
