@@ -46,7 +46,9 @@ static int wait_fd;
 
 static void signal_handler(int signal) {
     static const uint64_t x = 1;
-    write(wait_fd, &x, sizeof(x));
+    if (write(wait_fd, &x, sizeof(x)) == -1) {
+        MHDU_ERR("Failed to write to event file descriptor.");
+    }
 }
 
 static struct MHD_Response* handler1(void *cls,
