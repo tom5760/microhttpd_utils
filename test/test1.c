@@ -54,7 +54,6 @@ static void signal_handler(int signal) {
 static struct MHD_Response* handler1(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
-
     UT_string page;
     utstring_init(&page);
 
@@ -66,8 +65,49 @@ static struct MHD_Response* handler1(void *cls,
             url, nmatches);
 
     for (unsigned int i = 0; i < nmatches; i++) {
-        utstring_printf(&page, "<li>%s</li>", matches[i]);
+        utstring_printf(&page, "\t<li>%s</li>\n", matches[i]);
     }
+    utstring_printf(&page, "</ul><p>POST attributes:</p><ul>");
+
+    *code = MHD_HTTP_OK;
+    return MHD_create_response_from_buffer(utstring_len(&page),
+            utstring_body(&page), MHD_RESPMEM_MUST_FREE);
+}
+
+static struct MHD_Response* handler2(void *cls,
+        struct MHD_Connection *connection, const char *url, const char *method,
+        struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
+    static const char *page =
+        "<html>"
+            "<body>"
+                "<form action='/test' method='POST'>"
+                    "<input type='text' name='foo'/>"
+                    "<input type='submit' name='submit' value='Submit'/>"
+                "</form>"
+            "</body>"
+        "</html>";
+
+    *code = MHD_HTTP_OK;
+    return MHD_create_response_from_buffer(strlen(page), (char*)page,
+            MHD_RESPMEM_PERSISTENT);
+}
+
+static void handler3_cb(void *cls, const char *key, const char *value,
+                        size_t length) {
+    UT_string *page = (UT_string*)cls;
+    utstring_printf(page, "\t<li><b>%s:</b> %.*s</li>\n", key, length, value);
+}
+
+static struct MHD_Response* handler3(void *cls,
+        struct MHD_Connection *connection, const char *url, const char *method,
+        struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
+    UT_string page;
+    utstring_init(&page);
+
+    utstring_printf(&page, "<html><body><p>POST:</p><ul>\n");
+
+    MHDU_attributes_iter(mhdu_con, &handler3_cb, &page);
+
     utstring_printf(&page, "</ul></body></html>");
 
     *code = MHD_HTTP_OK;
@@ -110,6 +150,18 @@ int main(int argc, char **argv) {
     }
 
     if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET, &handler1,
+                       NULL) != MHD_YES) {
+        MHDU_ERR("Failed to add route.");
+        goto done;
+    }
+
+    if (MHDU_add_route(router, "^/test$", MHDU_METHOD_GET, &handler2,
+                       NULL) != MHD_YES) {
+        MHDU_ERR("Failed to add route.");
+        goto done;
+    }
+
+    if (MHDU_add_route(router, "^/test$", MHDU_METHOD_POST, &handler3,
                        NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;

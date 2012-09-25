@@ -59,7 +59,10 @@ def build(ctx):
             'deps/tj-tools/src',
             'deps/uthash/src',
         ],
-        source = 'src/microhttpd_utils.c',
+        source = [
+            'deps/tj-tools/src/tj_buffer.c',
+            'src/microhttpd_utils.c',
+        ],
     )
 
     ctx.program(

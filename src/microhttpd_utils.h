@@ -90,9 +90,9 @@ typedef struct MHD_Response* (*MHDU_RequestRouteCallback)(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **con_cls);
 
-/** Callback to iterate over POST attributes. */
-typedef void (*MHDU_PostAttributeCallback)(void *cls, const char *key,
-                                           const char *value);
+/** Callback to iterate over GET/POST attributes. */
+typedef void (*MHDU_AttributeCallback)(void *cls, const char *key,
+                                       const char *value, size_t length);
 
 /** Creates a new router instance. */
 struct MHDU_Router* MHDU_create_router(void);
@@ -135,6 +135,14 @@ int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
  */
 char** MHDU_connection_get_matches(const struct MHDU_Connection *mhdu_con,
                                    size_t *nmatches);
+
+/** Iterate over the attributes in a request. */
+void MHDU_attributes_iter(const struct MHDU_Connection *mhdu_con,
+                          MHDU_AttributeCallback cb, void *cls);
+
+/** Get a specific attribute in a request. */
+void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
+                        const char *key, const char **value, size_t *length);
 
 /** Starts the MHD daemon, setting up the router as the handler callback. */
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
