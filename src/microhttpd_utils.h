@@ -99,7 +99,8 @@ typedef void (*MHDU_AttributeCallback)(void *cls, const char *key,
 
 /** Callback when a subscription fires. */
 typedef ssize_t (*MHDU_PubSubCallback)(void *cls, const char *channel,
-        const char *value, size_t length, char *buf, size_t max);
+        const char *value, size_t value_length, size_t offset,
+        char *buf, size_t max);
 
 /** Creates a new router instance. */
 struct MHDU_Router* MHDU_create_router(void);
@@ -162,4 +163,4 @@ struct MHD_Response* MHDU_create_response_from_subscription(
         const char *channel, int *code, MHDU_PubSubCallback cb, void *cls);
 
 int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
-        const char *data, size_t length);
+        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem);

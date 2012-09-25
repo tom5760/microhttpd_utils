@@ -32,7 +32,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <regex.h>
-#include <semaphore.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +87,20 @@ struct MHDU_Router {
     struct route *routes;
 };
 
+struct queue_item {
+    struct channel *channel;
+
+    char *data;
+    size_t length;
+    enum MHD_ResponseMemoryMode respmem;
+
+    int refcount;
+
+    /* Items stored in a doubly-linked list. */
+    struct queue_item *next;
+    struct queue_item *prev;
+};
+
 struct channel {
     char *name;
 
@@ -95,14 +109,15 @@ struct channel {
     int n_subscriptions;
     struct subscription *subscriptions;
 
-    pthread_mutex_t pub_lock;
-    sem_t pub_sem;
+    /* Reentrant lock for publishing. */
+    pthread_mutex_t lock;
 
-    pthread_mutex_t sub_lock;
-    pthread_cond_t sub_cond;
+    /* Subscriptions wait for this condition to be broadcast. */
+    pthread_cond_t cond;
 
-    char *data;
-    size_t length;
+    sig_atomic_t closed;
+
+    struct queue_item *queue;
 
     /* Items kept in a hash table. */
     UT_hash_handle hh;
@@ -113,6 +128,9 @@ struct subscription {
     void *cls;
 
     struct channel *channel;
+
+    struct queue_item *current;
+    size_t read_length;
 
     /* Items kept in a doubly-linked list. */
     struct subscription *prev;
@@ -156,7 +174,8 @@ static void handle_request_complete(void *cls,
 static struct MHD_Response* handle_404(int *code);
 static struct MHD_Response* handle_500(int *code);
 
-static struct channel* create_channel(const char *name);
+static struct channel* create_or_find_channel(
+        struct MHDU_PubSubManager *pubsub, const char *name);
 static void destroy_channel(struct channel *channel);
 
 static struct subscription* create_subscription(struct channel *channel,
@@ -166,6 +185,12 @@ static void destroy_subscription(struct subscription *subscription);
 static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf, size_t max);
 
 static void pubsub_free_callback(void *cls);
+
+static struct queue_item* create_queue_item(struct channel *channel,
+        char *data, size_t length, enum MHD_ResponseMemoryMode respmem);
+static void destroy_queue_item(struct queue_item *item);
+static void ref_queue_item(struct queue_item *item);
+static void deref_queue_item(struct queue_item *item);
 
 /** client_addr_str should be of size INET_ADDRSTRLEN. */
 static void get_client_addr_str(struct MHD_Connection *connection,
@@ -367,12 +392,24 @@ struct MHDU_PubSubManager* MHDU_create_pubsub_manager(void) {
 }
 
 void MHDU_destroy_pubsub_manager(struct MHDU_PubSubManager *pubsub) {
+    if (pthread_mutex_lock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to aquire pubsub lock.");
+    }
+
     struct channel *channel;
     struct channel *tmp;
     HASH_ITER(hh, pubsub->channels, channel, tmp) {
         HASH_DEL(pubsub->channels, channel);
-        destroy_channel(channel);
+        channel->closed = 1;
+        if (pthread_cond_broadcast(&channel->cond) != 0) {
+            MHDU_ERR("Failed to broadcast condition variable.");
+        }
     }
+
+    if (pthread_mutex_unlock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to release pubsub lock.");
+    }
+
     pthread_mutex_destroy(&pubsub->lock);
 
     free(pubsub);
@@ -381,24 +418,10 @@ void MHDU_destroy_pubsub_manager(struct MHDU_PubSubManager *pubsub) {
 struct MHD_Response* MHDU_create_response_from_subscription(
         struct MHDU_PubSubManager *pubsub, struct MHDU_Connection *mhdu_con,
         const char *name, int *code, MHDU_PubSubCallback cb, void *cls) {
-    struct channel *channel;
-    HASH_FIND_STR(pubsub->channels, name, channel);
+
+    struct channel *channel = create_or_find_channel(pubsub, name);
     if (channel == NULL) {
-        MHDU_LOG("New channel: %s", name);
-        channel = create_channel(name);
-        if (channel == NULL) {
-            return NULL;
-        }
-        if (pthread_mutex_lock(&pubsub->lock) != 0) {
-            MHDU_ERR("Failed to lock pubsub manager.");
-            destroy_channel(channel);
-            return NULL;
-        }
-        HASH_ADD_KEYPTR(hh, pubsub->channels, channel->name,
-                strlen(channel->name), channel);
-        if (pthread_mutex_unlock(&pubsub->lock) != 0) {
-            MHDU_ERR("Failed to unlock pubsub manager.");
-        }
+        return NULL;
     }
 
     struct subscription *subscription = create_subscription(channel, cb, cls);
@@ -413,37 +436,35 @@ struct MHD_Response* MHDU_create_response_from_subscription(
 }
 
 int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
-        const char *data, size_t length) {
-    struct channel *channel;
-    HASH_FIND_STR(pubsub->channels, name, channel);
+        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem) {
+    struct channel *channel = create_or_find_channel(pubsub, name);
     if (channel == NULL) {
-        MHDU_ERR("No such channel: %s", name);
         return MHD_NO;
     }
 
-    if (pthread_mutex_lock(&channel->pub_lock) != 0) {
+    if (pthread_mutex_lock(&channel->lock) != 0) {
         MHDU_ERR("Failed to lock channel.");
         return MHD_NO;
     }
 
-    channel->data = (char*)data;
-    channel->length = length;
-
-    if (pthread_cond_broadcast(&channel->sub_cond) != 0) {
-        MHDU_ERR("Failed to broadcast condition variable.");
-        if (pthread_mutex_unlock(&channel->pub_lock) != 0) {
-            MHDU_ERR("Failed to unlock channel.");
+    if (channel->n_subscriptions > 0) {
+        struct queue_item *item = create_queue_item(channel, (char*)data,
+                length, respmem);
+        if (item == NULL) {
+            return MHD_NO;
         }
-        return MHD_NO;
+
+        DL_APPEND(channel->queue, item);
+        if (pthread_cond_broadcast(&channel->cond) != 0) {
+            MHDU_ERR("Failed to broadcast condition variable.");
+        }
+        MHDU_LOG("Published to channel %s", name);
     }
 
-    for (int i = 0; i < channel->n_subscriptions; i++) {
-        sem_wait(&channel->pub_sem);
-    }
-
-    if (pthread_mutex_unlock(&channel->pub_lock) != 0) {
+    if (pthread_mutex_unlock(&channel->lock) != 0) {
         MHDU_ERR("Failed to unlock channel.");
     }
+
     return MHD_YES;
 }
 
@@ -692,6 +713,8 @@ static void handle_request_complete(void *cls,
         enum MHD_RequestTerminationCode toe) {
     struct MHDU_Connection *mhdu_con = (struct MHDU_Connection*)*con_cls;
 
+    MHDU_LOG("ASDF");
+
     if (mhdu_con != NULL) {
         destroy_mhdu_connection(mhdu_con);
     }
@@ -730,58 +753,101 @@ static struct MHD_Response* handle_500(int *code) {
             MHD_RESPMEM_PERSISTENT);
 }
 
-static struct channel* create_channel(const char *name) {
-    struct channel *channel = calloc(1, sizeof(*channel));
-    if (channel == NULL) {
-        MHDU_ERR("Failed to allocate memory for channel.");
+static struct channel* create_or_find_channel(
+        struct MHDU_PubSubManager *pubsub, const char *name) {
+    if (pthread_mutex_lock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to aquire pubsub lock.");
         return NULL;
     }
 
-    channel->name = strdup(name);
-    if (channel->name == NULL) {
-        MHDU_ERR("Failed to duplicate name for channel.");
-        goto error;
+    struct channel *channel;
+    HASH_FIND_STR(pubsub->channels, name, channel);
+    if (channel == NULL) {
+        MHDU_LOG("New channel: %s", name);
+        channel = calloc(1, sizeof(*channel));
+        if (channel == NULL) {
+            MHDU_ERR("Failed to allocate memory for channel.");
+            goto error;
+        }
+
+        channel->name = strdup(name);
+        if (channel->name == NULL) {
+            MHDU_ERR("Failed to duplicate name for channel.");
+            goto error;
+        }
+
+        pthread_mutexattr_t attr;
+        if (pthread_mutexattr_init(&attr) != 0) {
+            MHDU_ERR("Failed to create mutex attribute.");
+            goto error;
+        }
+
+        if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
+            MHDU_ERR("Failed to set recursive mutex type.");
+            goto error;
+        }
+
+        if (pthread_mutex_init(&channel->lock, &attr) != 0) {
+            MHDU_ERR("Failed to create publish lock.");
+            goto error;
+        }
+
+        if (pthread_mutexattr_destroy(&attr) != 0) {
+            MHDU_ERR("Failed to destroy mutex attribute.");
+            /* not a fatal error. */
+        }
+
+        channel->pubsub = pubsub;
+
+        channel->n_subscriptions = 0;
+        channel->subscriptions = NULL;
+
+        channel->cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+
+        HASH_ADD_KEYPTR(hh, pubsub->channels, channel->name,
+                strlen(channel->name), channel);
     }
 
-    if (sem_init(&channel->pub_sem, 0, 0) != 0) {
-        MHDU_ERR("Failed to initialize channel semaphore.");
-        goto error;
+    if (pthread_mutex_unlock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to release pubsub lock.");
     }
-
-    channel->pub_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    channel->sub_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    channel->sub_cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 
     return channel;
 
 error:
+    if (pthread_mutex_unlock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to release pubsub lock.");
+    }
+
+    channel->pubsub = NULL;
     destroy_channel(channel);
     return NULL;
 }
 
 static void destroy_channel(struct channel *channel) {
-    struct subscription *subscription;
-    struct subscription *tmp;
-    DL_FOREACH_SAFE(channel->subscriptions, subscription, tmp) {
-        DL_DELETE(channel->subscriptions, subscription);
-        destroy_subscription(subscription);
+    channel->closed = 1;
+
+    if (channel->pubsub != NULL) {
+        if (pthread_mutex_lock(&channel->pubsub->lock) != 0) {
+            MHDU_LOG("Failed to aquire pubsub lock.");
+        }
+        HASH_DEL(channel->pubsub->channels, channel);
+        if (pthread_mutex_unlock(&channel->pubsub->lock) != 0) {
+            MHDU_LOG("Failed to release pubsub lock.");
+        }
+        channel->pubsub = NULL;
     }
 
-    if (pthread_mutex_lock(&channel->pubsub->lock) != 0) {
-        MHDU_ERR("Failed to lock pubsub manager.");
+    if (channel->n_subscriptions > 0) {
+        if (pthread_cond_broadcast(&channel->cond) != 0) {
+            MHDU_ERR("Failed to broadcast condition variable.");
+        }
+        MHDU_LOG("Some subscriptions still running.");
+        return;
     }
 
-    HASH_DEL(channel->pubsub->channels, channel);
-
-    if (pthread_mutex_unlock(&channel->pubsub->lock) != 0) {
-        MHDU_ERR("Failed to unlock pubsub manager.");
-    }
-
-    pthread_mutex_destroy(&channel->pub_lock);
-    sem_destroy(&channel->pub_sem);
-
-    pthread_mutex_destroy(&channel->sub_lock);
-    pthread_cond_destroy(&channel->sub_cond);
+    pthread_mutex_destroy(&channel->lock);
+    pthread_cond_destroy(&channel->cond);
 
     free(channel->name);
     free(channel);
@@ -795,22 +861,18 @@ static struct subscription* create_subscription(struct channel *channel,
         return NULL;
     }
 
-    if (pthread_mutex_lock(&channel->sub_lock) != 0) {
-        MHDU_ERR("Failed to lock channel.");
-        if (channel->subscriptions == NULL) {
-            destroy_channel(channel);
-        }
-        free(subscription);
-        return NULL;
-    }
-    DL_APPEND(channel->subscriptions, subscription);
-    channel->n_subscriptions++;
-
     subscription->channel = channel;
     subscription->callback = cb;
     subscription->cls = cls;
 
-    if (pthread_mutex_unlock(&channel->sub_lock) != 0) {
+    if (pthread_mutex_lock(&channel->lock) != 0) {
+        MHDU_ERR("Failed to lock channel.");
+    }
+
+    DL_APPEND(channel->subscriptions, subscription);
+    channel->n_subscriptions++;
+
+    if (pthread_mutex_unlock(&channel->lock) != 0) {
         MHDU_ERR("Failed to unlock channel.");
     }
 
@@ -820,45 +882,188 @@ static struct subscription* create_subscription(struct channel *channel,
 static void destroy_subscription(struct subscription *subscription) {
     struct channel *channel = subscription->channel;
 
-    if (pthread_mutex_lock(&channel->sub_lock) != 0) {
-        DL_DELETE(subscription->channel->subscriptions, subscription);
-        subscription->channel->n_subscriptions--;
+    if (subscription->current != NULL) {
+        deref_queue_item(subscription->current);
     }
+
+    if (channel != NULL) {
+        if (pthread_mutex_lock(&channel->lock) != 0) {
+            MHDU_ERR("Failed to lock channel.");
+        }
+
+        DL_DELETE(channel->subscriptions, subscription);
+        channel->n_subscriptions--;
+
+        if (channel->n_subscriptions <= 0) {
+            MHDU_LOG("No subscriptions left, destroying channel.");
+
+            if (pthread_mutex_unlock(&channel->lock) != 0) {
+                MHDU_ERR("Failed to unlock channel.");
+            }
+            destroy_channel(channel);
+        } else {
+            if (pthread_mutex_unlock(&channel->lock) != 0) {
+                MHDU_ERR("Failed to unlock channel.");
+            }
+        }
+    }
+
     free(subscription);
-    if (channel->subscriptions == NULL) {
-        destroy_channel(channel);
-    }
+
 }
 
 static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf,
         size_t max) {
     struct subscription *subscription = (struct subscription*)cls;
-    struct channel *channel = subscription->channel;
+    ssize_t rv = 0;
 
-    if (pthread_mutex_lock(&channel->sub_lock) != 0) {
-        MHDU_ERR("Failed to lock channel.");
-        return MHD_CONTENT_READER_END_WITH_ERROR;
+    if (subscription->channel->closed) {
+        MHDU_LOG("Channel shutting down.");
+        rv = MHD_CONTENT_READER_END_OF_STREAM;
+        destroy_subscription(subscription);
+        goto done;
     }
 
-    if (pthread_cond_wait(&channel->sub_cond, &channel->sub_lock) != 0) {
-        MHDU_ERR("Failed to wait for condition.");
-        return MHD_CONTENT_READER_END_WITH_ERROR;
+    if ((subscription->current == NULL)
+            || (subscription->read_length == subscription->current->length)) {
+        if (pthread_mutex_lock(&subscription->channel->lock) != 0) {
+            MHDU_ERR("Failed to lock channel.");
+            return MHD_CONTENT_READER_END_WITH_ERROR;
+        }
+
+        if ((subscription->channel->queue == NULL)
+                || (subscription->channel->queue == subscription->current)) {
+            MHDU_LOG("Waiting for new item");
+            if (pthread_cond_wait(&subscription->channel->cond,
+                        &subscription->channel->lock) != 0) {
+                MHDU_ERR("Failed to wait for condition.");
+                return MHD_CONTENT_READER_END_WITH_ERROR;
+            }
+        }
+
+        if (subscription->channel->closed) {
+            MHDU_LOG("Channel shutting down.");
+            rv = MHD_CONTENT_READER_END_OF_STREAM;
+            destroy_subscription(subscription);
+            goto done;
+        }
+
+        MHDU_LOG("New item!");
+        subscription->current = subscription->channel->queue;
+        subscription->read_length = 0;
+        ref_queue_item(subscription->current);
+
+        if (pthread_mutex_unlock(&subscription->channel->lock) != 0) {
+            MHDU_ERR("Failed to unlock channel.");
+            return MHD_CONTENT_READER_END_WITH_ERROR;
+        }
     }
 
-    ssize_t rv = subscription->callback(subscription->cls, channel->name,
-            channel->data, channel->length, buf, max);
+    rv = subscription->callback(subscription->cls, subscription->channel->name,
+            subscription->current->data, subscription->current->length,
+            subscription->read_length, buf, max);
+    subscription->read_length += rv;
 
-    if (pthread_mutex_unlock(&channel->sub_lock) != 0) {
-        MHDU_ERR("Failed to unlock channel.");
+    if (subscription->read_length == subscription->current->length) {
+        deref_queue_item(subscription->current);
     }
 
-    if (sem_post(&channel->pub_sem) != 0) {
-        MHDU_ERR("Failed to increment semaphore.");
-    }
+    MHDU_LOG("Read: %zd/%zd", subscription->read_length,
+            subscription->current->length);
 
+done:
     return rv;
 }
 
 static void pubsub_free_callback(void *cls) {
     destroy_subscription((struct subscription*)cls);
+}
+
+static struct queue_item* create_queue_item(struct channel *channel,
+        char *data, size_t length, enum MHD_ResponseMemoryMode respmem) {
+    struct queue_item *item = calloc(1, sizeof(*item));
+    if (item == NULL) {
+        MHDU_ERR("Failed to allocate queue item.");
+        return NULL;
+    }
+
+    item->channel = channel;
+    item->refcount = 0;
+
+    item->length = length;
+    item->respmem = respmem;
+    switch (respmem) {
+        case MHD_RESPMEM_PERSISTENT:
+        case MHD_RESPMEM_MUST_FREE:
+            item->data = data;
+            break;
+        case MHD_RESPMEM_MUST_COPY:
+            item->data = malloc(length);
+            if (item->data == NULL) {
+                MHDU_ERR("Failed to copy queue item data.");
+                goto error;
+            }
+            memcpy(item->data, data, length);
+            break;
+        default:
+            MHDU_ERR("Invalid queue item memory mode.");
+            goto error;
+    }
+
+    return item;
+
+error:
+    item->channel = NULL;
+    destroy_queue_item(item);
+    return NULL;
+}
+
+static void destroy_queue_item(struct queue_item *item) {
+    struct channel *channel = item->channel;
+
+    if (channel != NULL) {
+        if (pthread_mutex_lock(&channel->lock) != 0) {
+            MHDU_ERR("Failed to lock channel.");
+        }
+        DL_DELETE(channel->queue, item);
+        if (pthread_mutex_unlock(&channel->lock) != 0) {
+            MHDU_ERR("Failed to unlock channel.");
+        }
+    }
+
+    switch (item->respmem) {
+        case MHD_RESPMEM_MUST_FREE:
+        case MHD_RESPMEM_MUST_COPY:
+            free(item->data);
+            break;
+        case MHD_RESPMEM_PERSISTENT:
+        default:
+            break;
+    }
+    free(item);
+}
+
+static void ref_queue_item(struct queue_item *item) {
+    if (pthread_mutex_lock(&item->channel->lock) != 0) {
+        MHDU_ERR("Failed to lock channel.");
+    }
+    item->refcount++;
+    if (pthread_mutex_unlock(&item->channel->lock) != 0) {
+        MHDU_ERR("Failed to unlock channel.");
+    }
+}
+
+static void deref_queue_item(struct queue_item *item) {
+    struct channel *channel = item->channel;
+    if (channel != NULL && pthread_mutex_lock(&channel->lock) != 0) {
+        MHDU_ERR("Failed to lock channel.");
+    }
+    item->refcount--;
+    MHDU_LOG("REFCOUNT: %d", item->refcount);
+    if (item->refcount == 0) {
+        destroy_queue_item(item);
+    }
+    if (channel != NULL && pthread_mutex_unlock(&channel->lock) != 0) {
+        MHDU_ERR("Failed to unlock channel.");
+    }
 }
