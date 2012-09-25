@@ -95,12 +95,11 @@ typedef struct MHD_Response* (*MHDU_RequestRouteCallback)(void *cls,
 
 /** Callback to iterate over GET/POST attributes. */
 typedef void (*MHDU_AttributeCallback)(void *cls, const char *key,
-                                       const char *value, size_t length);
+        const char *value, size_t length);
 
 /** Callback when a subscription fires. */
 typedef ssize_t (*MHDU_PubSubCallback)(void *cls, const char *channel,
-                                       const char *value, size_t length,
-                                       char *buf, size_t max);
+        const char *value, size_t length, char *buf, size_t max);
 
 /** Creates a new router instance. */
 struct MHDU_Router* MHDU_create_router(void);
@@ -123,8 +122,7 @@ void MHDU_destroy_router(struct MHDU_Router *router);
  * @returns MHD_YES on success MHD_NO on failure.
  */
 int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
-                   enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb,
-                   void *cls);
+        enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb, void *cls);
 
 /**
  * An MHD_AccessHandlerCallback to process requests from MHD.
@@ -132,9 +130,8 @@ int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
  * Set this as the MHD_AccessHandlerCallback in MHD_start_daemon.
  */
 int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
-               const char *method, const char *version,
-               const char *upload_data, size_t *upload_data_size,
-               void **con_cls);
+        const char *method, const char *version, const char *upload_data,
+        size_t *upload_data_size, void **con_cls);
 
 /**
  * Returns an array of strings for each group of a route pattern match.
@@ -142,19 +139,19 @@ int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
  * @param[out] nmatches Filled in with the number of items in the array.
  */
 char** MHDU_connection_get_matches(const struct MHDU_Connection *mhdu_con,
-                                   size_t *nmatches);
+        size_t *nmatches);
 
 /** Iterate over the attributes in a request. */
 void MHDU_attributes_iter(const struct MHDU_Connection *mhdu_con,
-                          MHDU_AttributeCallback cb, void *cls);
+        MHDU_AttributeCallback cb, void *cls);
 
 /** Get a specific attribute in a request. */
 void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
-                        const char *key, const char **value, size_t *length);
+        const char *key, const char **value, size_t *length);
 
 /** Starts the MHD daemon, setting up the router as the handler callback. */
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
-                                     struct MHDU_Router *router);
+        struct MHDU_Router *router);
 
 struct MHDU_PubSubManager* MHDU_create_pubsub_manager(void);
 
@@ -165,4 +162,4 @@ struct MHD_Response* MHDU_create_response_from_subscription(
         const char *channel, int *code, MHDU_PubSubCallback cb, void *cls);
 
 int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
-                      const char *data, size_t length);
+        const char *data, size_t length);

@@ -93,7 +93,7 @@ static struct MHD_Response* handler2(void *cls,
 }
 
 static void handler3_cb(void *cls, const char *key, const char *value,
-                        size_t length) {
+        size_t length) {
     UT_string *page = (UT_string*)cls;
     utstring_printf(page, "\t<li><b>%s:</b> %.*s</li>\n", key, length, value);
 }
@@ -113,7 +113,7 @@ static struct MHD_Response* handler3(void *cls,
     utstring_printf(&page, "</ul></body></html>");
 
     MHDU_publish_data(pubsub, "sub1", utstring_body(&page),
-                     utstring_len(&page));
+            utstring_len(&page));
 
     *code = MHD_HTTP_OK;
     return MHD_create_response_from_buffer(utstring_len(&page),
@@ -121,7 +121,7 @@ static struct MHD_Response* handler3(void *cls,
 }
 
 static ssize_t handler4_cb(void *cls, const char *channel, const char *value,
-                           size_t length, char *buf, size_t max) {
+        size_t length, char *buf, size_t max) {
     MHDU_LOG("FOOOOO");
     size_t n;
     if (length > max) {
@@ -170,7 +170,7 @@ int main(int argc, char **argv) {
 
     struct pollfd poll_fds[] = {{
         .fd = wait_fd,
-        .events = POLLIN,
+            .events = POLLIN,
     }};
 
     router = MHDU_create_router();
@@ -184,25 +184,25 @@ int main(int argc, char **argv) {
     }
 
     if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET, &handler1,
-                       NULL) != MHD_YES) {
+                NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
     if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_GET, &handler2,
-                       NULL) != MHD_YES) {
+                NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
     if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_POST, &handler3,
-                       pubsub) != MHD_YES) {
+                pubsub) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
     if (MHDU_add_route(router, "^/subscribe$", MHDU_METHOD_GET, &handler4,
-                       pubsub) != MHD_YES) {
+                pubsub) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }

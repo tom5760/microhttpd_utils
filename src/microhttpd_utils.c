@@ -125,8 +125,7 @@ struct MHDU_PubSubManager {
 };
 
 static struct route* create_route(const char *pattern,
-                                  enum MHDU_METHOD methods,
-                                  MHDU_RequestRouteCallback cb, void *cls);
+        enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb, void *cls);
 static void destroy_route(struct route *route);
 
 static struct MHDU_Connection* create_mhdu_connection(
@@ -144,12 +143,11 @@ static int post_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
         const char *transfer_encoding, const char *data, uint64_t off,
         size_t size);
 static int post_iterator_meta(struct MHDU_Connection *mhdu_con,
-                              enum MHD_ValueKind kind,
-                              const char *key, const char *postfix,
-                              const char *value);
+        enum MHD_ValueKind kind, const char *key, const char *postfix,
+        const char *value);
 
 static int item_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
-                         const char *value);
+        const char *value);
 
 static void handle_request_complete(void *cls,
         struct MHD_Connection *connection, void **con_cls,
@@ -170,8 +168,8 @@ static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf, size_t max);
 static void pubsub_free_callback(void *cls);
 
 /** client_addr_str should be of size INET_ADDRSTRLEN. */
-static void get_client_addr_str(
-        struct MHD_Connection *connection, char *client_addr_str);
+static void get_client_addr_str(struct MHD_Connection *connection,
+        char *client_addr_str);
 
 struct MHDU_Router *MHDU_create_router(void) {
     struct MHDU_Router *router = calloc(1, sizeof(*router));
@@ -195,8 +193,8 @@ void MHDU_destroy_router(struct MHDU_Router *router) {
 }
 
 int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
-                   enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb,
-                   void *cls) {
+        enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb,
+        void *cls) {
     struct route *route = create_route(pattern, methods, cb, cls);
     if (route == NULL) {
         return MHD_NO;
@@ -207,9 +205,8 @@ int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
 }
 
 int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
-               const char *method, const char *version,
-               const char *upload_data, size_t *upload_data_size,
-               void **con_cls) {
+        const char *method, const char *version, const char *upload_data,
+        size_t *upload_data_size, void **con_cls) {
     struct MHDU_Router *router = (struct MHDU_Router*)cls;
     struct MHDU_Connection *mhdu_con = (struct MHDU_Connection*)*con_cls;
 
@@ -251,24 +248,24 @@ int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
             }
 
             if (rv == 0 && (((route->methods & MHDU_METHOD_CONNECT)
-                        && strcmp(method, MHD_HTTP_METHOD_CONNECT) == 0)
-                    || ((route->methods & MHDU_METHOD_DELETE)
-                        && strcmp(method, MHD_HTTP_METHOD_DELETE) == 0)
-                    || ((route->methods & MHDU_METHOD_GET)
-                        && strcmp(method, MHD_HTTP_METHOD_GET) == 0)
-                    || ((route->methods & MHDU_METHOD_HEAD)
-                        && strcmp(method, MHD_HTTP_METHOD_HEAD) == 0)
-                    || ((route->methods & MHDU_METHOD_POST)
-                        && strcmp(method, MHD_HTTP_METHOD_POST) == 0)
-                    || ((route->methods & MHDU_METHOD_PUT)
-                        && strcmp(method, MHD_HTTP_METHOD_PUT) == 0)
-                    || ((route->methods & MHDU_METHOD_TRACE)
-                        && strcmp(method, MHD_HTTP_METHOD_TRACE) == 0))) {
+                            && strcmp(method, MHD_HTTP_METHOD_CONNECT) == 0)
+                        || ((route->methods & MHDU_METHOD_DELETE)
+                            && strcmp(method, MHD_HTTP_METHOD_DELETE) == 0)
+                        || ((route->methods & MHDU_METHOD_GET)
+                            && strcmp(method, MHD_HTTP_METHOD_GET) == 0)
+                        || ((route->methods & MHDU_METHOD_HEAD)
+                            && strcmp(method, MHD_HTTP_METHOD_HEAD) == 0)
+                        || ((route->methods & MHDU_METHOD_POST)
+                            && strcmp(method, MHD_HTTP_METHOD_POST) == 0)
+                        || ((route->methods & MHDU_METHOD_PUT)
+                            && strcmp(method, MHD_HTTP_METHOD_PUT) == 0)
+                        || ((route->methods & MHDU_METHOD_TRACE)
+                            && strcmp(method, MHD_HTTP_METHOD_TRACE) == 0))) {
 
                 /* Found a route, break. */
                 MHDU_LOG("Found route.");
                 if (connection_set_route(mhdu_con, route, url, matches,
-                                         ngroups) != MHD_YES) {
+                            ngroups) != MHD_YES) {
                     return MHD_NO;
                 }
                 break;
@@ -290,7 +287,7 @@ int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
 
     if (*upload_data_size > 0) {
         if (MHD_post_process(mhdu_con->post_processor, upload_data,
-                             *upload_data_size) != MHD_YES) {
+                    *upload_data_size) != MHD_YES) {
             MHDU_ERR("Error processing POST data.");
             return MHD_NO;
         }
@@ -299,12 +296,12 @@ int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
     }
 
     MHD_get_connection_values(connection, MHD_GET_ARGUMENT_KIND,
-                              &item_iterator, mhdu_con);
+            &item_iterator, mhdu_con);
     MHD_get_connection_values(connection, MHD_POSTDATA_KIND, &item_iterator,
-                              mhdu_con);
+            mhdu_con);
 
     response = route->callback(route->cls, connection, url, method, mhdu_con,
-                               &code, &mhdu_con->con_cls);
+            &code, &mhdu_con->con_cls);
     if (response == NULL) {
         MHDU_LOG("NULL response from callback");
         response = handle_500(&code);
@@ -320,23 +317,23 @@ done:
 }
 
 char** MHDU_connection_get_matches(const struct MHDU_Connection *mhdu_con,
-                                   size_t *nmatches) {
+        size_t *nmatches) {
     *nmatches = mhdu_con->nmatches;
     return mhdu_con->matches;
 }
 
 void MHDU_attributes_iter(const struct MHDU_Connection *mhdu_con,
-                          MHDU_AttributeCallback cb, void *cls) {
+        MHDU_AttributeCallback cb, void *cls) {
     struct post_attribute *attribute;
     struct post_attribute *tmp;
     HASH_ITER(hh, mhdu_con->post_attributes, attribute, tmp) {
         cb(cls, attribute->key, tj_buffer_getAsString(attribute->value),
-           tj_buffer_getUsed(attribute->value));
+                tj_buffer_getUsed(attribute->value));
     }
 }
 
 void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
-                        const char *key, const char **value, size_t *length) {
+        const char *key, const char **value, size_t *length) {
     struct post_attribute *attribute;
     HASH_FIND_STR(mhdu_con->post_attributes, key, attribute);
     if (attribute == NULL) {
@@ -347,16 +344,16 @@ void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
 }
 
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
-                                     struct MHDU_Router *router) {
+        struct MHDU_Router *router) {
     return MHD_start_daemon(flags, port,
-                            /* MHD_AcceptPolicyCallback and data */
-                            NULL, NULL,
-                            /* MHD_AccessHandlerCallback and data */
-                            &MHDU_route, router,
-                            /* MHD_OPTIONs */
-                            MHD_OPTION_NOTIFY_COMPLETED,
-                            &handle_request_complete, NULL,
-                            MHD_OPTION_END);
+            /* MHD_AcceptPolicyCallback and data */
+            NULL, NULL,
+            /* MHD_AccessHandlerCallback and data */
+            &MHDU_route, router,
+            /* MHD_OPTIONs */
+            MHD_OPTION_NOTIFY_COMPLETED,
+            &handle_request_complete, NULL,
+            MHD_OPTION_END);
 }
 
 struct MHDU_PubSubManager* MHDU_create_pubsub_manager(void) {
@@ -398,7 +395,7 @@ struct MHD_Response* MHDU_create_response_from_subscription(
             return NULL;
         }
         HASH_ADD_KEYPTR(hh, pubsub->channels, channel->name,
-                        strlen(channel->name), channel);
+                strlen(channel->name), channel);
         if (pthread_mutex_unlock(&pubsub->lock) != 0) {
             MHDU_ERR("Failed to unlock pubsub manager.");
         }
@@ -416,7 +413,7 @@ struct MHD_Response* MHDU_create_response_from_subscription(
 }
 
 int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
-                      const char *data, size_t length) {
+        const char *data, size_t length) {
     struct channel *channel;
     HASH_FIND_STR(pubsub->channels, name, channel);
     if (channel == NULL) {
@@ -451,8 +448,7 @@ int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
 }
 
 static struct route* create_route(const char *pattern,
-                                  enum MHDU_METHOD methods,
-                                  MHDU_RequestRouteCallback cb, void *cls) {
+        enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb, void *cls) {
     struct route *route = calloc(1, sizeof(*route));
     if (route == NULL) {
         MHDU_ERR("Failed to allocate memory for route.");
@@ -622,7 +618,7 @@ static int post_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
             return MHD_NO;
         }
         HASH_ADD_KEYPTR(hh, mhdu_con->post_attributes, attribute->key,
-                        strlen(attribute->key), attribute);
+                strlen(attribute->key), attribute);
     }
 
     if (tj_buffer_append(attribute->value, (const tj_buffer_byte*)data, size)
@@ -644,7 +640,7 @@ static int post_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
     }
 
     if (post_iterator_meta(mhdu_con, kind, key, "_transfer_encoding",
-                           transfer_encoding) != MHD_YES) {
+                transfer_encoding) != MHD_YES) {
         MHDU_ERR("Could not set transfer_encoding POST attribute.");
         goto error;
     }
@@ -658,9 +654,8 @@ error:
 }
 
 static int post_iterator_meta(struct MHDU_Connection *mhdu_con,
-                              enum MHD_ValueKind kind,
-                              const char *key, const char *postfix,
-                              const char *value) {
+        enum MHD_ValueKind kind, const char *key, const char *postfix,
+        const char *value) {
     if (value == NULL || value[0] == '\0') {
         return MHD_YES;
     }
@@ -673,13 +668,13 @@ static int post_iterator_meta(struct MHDU_Connection *mhdu_con,
     HASH_FIND_STR(mhdu_con->post_attributes, utstring_body(&new_key), tmp);
     if (tmp == NULL) {
         if (post_iterator(mhdu_con, kind, utstring_body(&new_key), NULL, NULL,
-                          NULL, value, 0, strlen(value)) != MHD_YES) {
+                    NULL, value, 0, strlen(value)) != MHD_YES) {
             utstring_done(&new_key);
             return MHD_NO;
         }
     } else if (strcmp(tj_buffer_getAsString(tmp->value), value) != 0) {
         MHDU_ERR("Mismatched values for key %s: %s, %s", key, value,
-                 tj_buffer_getAsString(tmp->value));
+                tj_buffer_getAsString(tmp->value));
     }
 
     utstring_done(&new_key);
@@ -687,9 +682,9 @@ static int post_iterator_meta(struct MHDU_Connection *mhdu_con,
 }
 
 static int item_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
-                         const char *value) {
+        const char *value) {
     return post_iterator(cls, kind, key, NULL, NULL, NULL, value, 0,
-                         strlen(value));
+            strlen(value));
 }
 
 static void handle_request_complete(void *cls,
@@ -713,8 +708,8 @@ static void handle_request_complete(void *cls,
     }
 }
 
-static void get_client_addr_str(
-        struct MHD_Connection *connection, char *client_addr_str) {
+static void get_client_addr_str(struct MHD_Connection *connection,
+        char *client_addr_str) {
     const union MHD_ConnectionInfo *info = MHD_get_connection_info(
             connection, MHD_CONNECTION_INFO_CLIENT_ADDRESS);
     inet_ntop(AF_INET, &((struct sockaddr_in*)info->client_addr)->sin_addr,
@@ -836,7 +831,7 @@ static void destroy_subscription(struct subscription *subscription) {
 }
 
 static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf,
-                               size_t max) {
+        size_t max) {
     struct subscription *subscription = (struct subscription*)cls;
     struct channel *channel = subscription->channel;
 
@@ -851,7 +846,7 @@ static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf,
     }
 
     ssize_t rv = subscription->callback(subscription->cls, channel->name,
-                                    channel->data, channel->length, buf, max);
+            channel->data, channel->length, buf, max);
 
     if (pthread_mutex_unlock(&channel->sub_lock) != 0) {
         MHDU_ERR("Failed to unlock channel.");
