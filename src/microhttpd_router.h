@@ -23,8 +23,8 @@
  */
 
 /**
- * @file microhttpd_utils.h
- * Simple add-ons for microhttpd to take care of common needs.
+ * @file microhttpd_router.h
+ * Regular expression-based URL Routing and connection management.
  *
  * Takes care of stuff like request routing, parsing POST items, etc.
  */
@@ -37,16 +37,16 @@
 
 #ifndef NDEBUG
 #  ifdef __ANDROID__
-#    define MHDU_LOG(M, ...) { __android_log_print(ANDROID_LOG_DEBUG, "MHDU", M, ##__VA_ARGS__); }
+#    define MHDU_LOG(M, ...) { __android_log_print(ANDROID_LOG_DEBUG, "MHDU_Router", M, ##__VA_ARGS__); }
 #  else
-#    define MHDU_LOG(M, ...) { fprintf(stdout, "%s: " M "\n", __FUNCTION__, ##__VA_ARGS__); }
+#    define MHDU_LOG(M, ...) { fprintf(stderr, "%s: " M "\n", __FUNCTION__, ##__VA_ARGS__); }
 #  endif
 #else
 #  define MHDU_LOG(M, ...)
 #endif
 
 #ifdef __ANDROID__
-#  define MHDU_ERR(M, ...) { __android_log_print(ANDROID_LOG_ERROR, "MHDU", M, ##__VA_ARGS__); }
+#  define MHDU_ERR(M, ...) { __android_log_print(ANDROID_LOG_ERROR, "MHDU_Router", M, ##__VA_ARGS__); }
 #else
 #  define MHDU_ERR(M, ...) { fprintf(stderr, "[ERROR] %s: " M "\n", __FUNCTION__, ##__VA_ARGS__); }
 #endif
@@ -60,9 +60,6 @@ struct MHDU_Router;
 
 /** Stores per-connection data. */
 struct MHDU_Connection;
-
-/** Stores data about groups of long-lived connections. */
-struct MHDU_PubSubManager;
 
 /** Flags for MHDU_add_route. */
 enum MHDU_METHOD {
@@ -96,11 +93,6 @@ typedef struct MHD_Response* (*MHDU_RequestRouteCallback)(void *cls,
 /** Callback to iterate over GET/POST attributes. */
 typedef void (*MHDU_AttributeCallback)(void *cls, const char *key,
         const char *value, size_t length);
-
-/** Callback when a subscription fires. */
-typedef ssize_t (*MHDU_PubSubCallback)(void *cls, const char *channel,
-        const char *value, size_t value_length, size_t offset,
-        char *buf, size_t max);
 
 /** Creates a new router instance. */
 struct MHDU_Router* MHDU_create_router(void);
@@ -153,14 +145,3 @@ void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
 /** Starts the MHD daemon, setting up the router as the handler callback. */
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
         struct MHDU_Router *router);
-
-struct MHDU_PubSubManager* MHDU_create_pubsub_manager(void);
-
-void MHDU_destroy_pubsub_manager(struct MHDU_PubSubManager *pubsub);
-
-struct MHD_Response* MHDU_create_response_from_subscription(
-        struct MHDU_PubSubManager *pubsub, struct MHDU_Connection *mhdu_con,
-        const char *channel, int *code, MHDU_PubSubCallback cb, void *cls);
-
-int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
-        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem);

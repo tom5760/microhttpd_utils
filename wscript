@@ -62,7 +62,8 @@ def build(ctx):
         ],
         source = [
             'deps/tj-tools/src/tj_buffer.c',
-            'src/microhttpd_utils.c',
+            'src/microhttpd_router.c',
+            'src/microhttpd_pubsub.c',
         ],
     )
 

@@ -38,7 +38,8 @@
 #include <utstring.h>
 
 #include <microhttpd.h>
-#include "microhttpd_utils.h"
+#include "microhttpd_router.h"
+#include "microhttpd_pubsub.h"
 
 static const uint16_t DEFAULT_PORT = 6892;
 
@@ -114,7 +115,7 @@ static void publish_post_cb(void *cls, const char *key, const char *value,
 static struct MHD_Response* publish_post(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
-    struct MHDU_PubSubManager *pubsub = (struct MHDU_PubSubManager*)cls;
+    struct MHDU_PubSub *pubsub = (struct MHDU_PubSub*)cls;
 
     UT_string page;
     utstring_init(&page);
@@ -160,7 +161,7 @@ static ssize_t subscribe_cb(void *cls, const char *channel, const char *value,
 static struct MHD_Response* subscribe(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
-    struct MHDU_PubSubManager *pubsub = (struct MHDU_PubSubManager*)cls;
+    struct MHDU_PubSub *pubsub = (struct MHDU_PubSub*)cls;
 
     size_t nmatches = 0;
     char **matches = MHDU_connection_get_matches(mhdu_con, &nmatches);
@@ -189,7 +190,7 @@ int main(int argc, char **argv) {
 
     struct MHDU_Router *router = NULL;
     struct MHD_Daemon *daemon = NULL;
-    struct MHDU_PubSubManager *pubsub = NULL;
+    struct MHDU_PubSub *pubsub = NULL;
 
     wait_fd = eventfd(0, 0);
 
@@ -208,7 +209,7 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    pubsub = MHDU_create_pubsub_manager();
+    pubsub = MHDU_create_pubsub();
     if (pubsub == NULL) {
         goto done;
     }
@@ -265,8 +266,8 @@ done:
     printf("Shutting down server.");
 
     close(wait_fd);
-    MHD_stop_daemon(daemon);
-    MHDU_destroy_pubsub_manager(pubsub);
+    MHDU_destroy_pubsub(pubsub);
     MHDU_destroy_router(router);
+    MHD_stop_daemon(daemon);
     return 0;
 }

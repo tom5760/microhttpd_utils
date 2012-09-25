@@ -30,14 +30,10 @@
  */
 
 #include <arpa/inet.h>
-#include <pthread.h>
 #include <regex.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <microhttpd.h>
 
 #include <uthash.h>
 #include <utlist.h>
@@ -45,10 +41,11 @@
 
 #include <tj_buffer.h>
 
-#include "microhttpd_utils.h"
+#include <microhttpd.h>
+
+#include "microhttpd_router.h"
 
 static const size_t POST_BUFFER_SIZE = 1024;
-static const size_t COMET_BLOCK_SIZE = 80;
 
 struct route {
     char *pattern;
@@ -87,61 +84,6 @@ struct MHDU_Router {
     struct route *routes;
 };
 
-struct queue_item {
-    struct channel *channel;
-
-    char *data;
-    size_t length;
-    enum MHD_ResponseMemoryMode respmem;
-
-    int refcount;
-
-    /* Items stored in a doubly-linked list. */
-    struct queue_item *next;
-    struct queue_item *prev;
-};
-
-struct channel {
-    char *name;
-
-    struct MHDU_PubSubManager *pubsub;
-
-    int n_subscriptions;
-    struct subscription *subscriptions;
-
-    /* Reentrant lock for publishing. */
-    pthread_mutex_t lock;
-
-    /* Subscriptions wait for this condition to be broadcast. */
-    pthread_cond_t cond;
-
-    sig_atomic_t closed;
-
-    struct queue_item *queue;
-
-    /* Items kept in a hash table. */
-    UT_hash_handle hh;
-};
-
-struct subscription {
-    MHDU_PubSubCallback callback;
-    void *cls;
-
-    struct channel *channel;
-
-    struct queue_item *current;
-    size_t read_length;
-
-    /* Items kept in a doubly-linked list. */
-    struct subscription *prev;
-    struct subscription *next;
-};
-
-struct MHDU_PubSubManager {
-    struct channel *channels;
-    pthread_mutex_t lock;
-};
-
 static struct route* create_route(const char *pattern,
         enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb, void *cls);
 static void destroy_route(struct route *route);
@@ -173,24 +115,6 @@ static void handle_request_complete(void *cls,
 
 static struct MHD_Response* handle_404(int *code);
 static struct MHD_Response* handle_500(int *code);
-
-static struct channel* create_or_find_channel(
-        struct MHDU_PubSubManager *pubsub, const char *name);
-static void destroy_channel(struct channel *channel);
-
-static struct subscription* create_subscription(struct channel *channel,
-        MHDU_PubSubCallback cb, void *cls);
-static void destroy_subscription(struct subscription *subscription);
-
-static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf, size_t max);
-
-static void pubsub_free_callback(void *cls);
-
-static struct queue_item* create_queue_item(struct channel *channel,
-        char *data, size_t length, enum MHD_ResponseMemoryMode respmem);
-static void destroy_queue_item(struct queue_item *item);
-static void ref_queue_item(struct queue_item *item);
-static void deref_queue_item(struct queue_item *item);
 
 /** client_addr_str should be of size INET_ADDRSTRLEN. */
 static void get_client_addr_str(struct MHD_Connection *connection,
@@ -379,93 +303,6 @@ struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
             MHD_OPTION_NOTIFY_COMPLETED,
             &handle_request_complete, NULL,
             MHD_OPTION_END);
-}
-
-struct MHDU_PubSubManager* MHDU_create_pubsub_manager(void) {
-    struct MHDU_PubSubManager *pubsub = calloc(1, sizeof(*pubsub));
-    if (pubsub == NULL) {
-        MHDU_LOG("Failed allocating pubsub manager.");
-        return NULL;
-    }
-
-    return pubsub;
-}
-
-void MHDU_destroy_pubsub_manager(struct MHDU_PubSubManager *pubsub) {
-    if (pthread_mutex_lock(&pubsub->lock) != 0) {
-        MHDU_LOG("Failed to aquire pubsub lock.");
-    }
-
-    struct channel *channel;
-    struct channel *tmp;
-    HASH_ITER(hh, pubsub->channels, channel, tmp) {
-        HASH_DEL(pubsub->channels, channel);
-        channel->closed = 1;
-        if (pthread_cond_broadcast(&channel->cond) != 0) {
-            MHDU_ERR("Failed to broadcast condition variable.");
-        }
-    }
-
-    if (pthread_mutex_unlock(&pubsub->lock) != 0) {
-        MHDU_LOG("Failed to release pubsub lock.");
-    }
-
-    pthread_mutex_destroy(&pubsub->lock);
-
-    free(pubsub);
-}
-
-struct MHD_Response* MHDU_create_response_from_subscription(
-        struct MHDU_PubSubManager *pubsub, struct MHDU_Connection *mhdu_con,
-        const char *name, int *code, MHDU_PubSubCallback cb, void *cls) {
-
-    struct channel *channel = create_or_find_channel(pubsub, name);
-    if (channel == NULL) {
-        return NULL;
-    }
-
-    struct subscription *subscription = create_subscription(channel, cb, cls);
-    if (subscription == NULL) {
-        return NULL;
-    }
-
-    *code = MHD_HTTP_OK;
-    return MHD_create_response_from_callback(MHD_SIZE_UNKNOWN,
-            COMET_BLOCK_SIZE, pubsub_callback, subscription,
-            pubsub_free_callback);
-}
-
-int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
-        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem) {
-    struct channel *channel = create_or_find_channel(pubsub, name);
-    if (channel == NULL) {
-        return MHD_NO;
-    }
-
-    if (pthread_mutex_lock(&channel->lock) != 0) {
-        MHDU_ERR("Failed to lock channel.");
-        return MHD_NO;
-    }
-
-    if (channel->n_subscriptions > 0) {
-        struct queue_item *item = create_queue_item(channel, (char*)data,
-                length, respmem);
-        if (item == NULL) {
-            return MHD_NO;
-        }
-
-        DL_APPEND(channel->queue, item);
-        if (pthread_cond_broadcast(&channel->cond) != 0) {
-            MHDU_ERR("Failed to broadcast condition variable.");
-        }
-        MHDU_LOG("Published to channel %s", name);
-    }
-
-    if (pthread_mutex_unlock(&channel->lock) != 0) {
-        MHDU_ERR("Failed to unlock channel.");
-    }
-
-    return MHD_YES;
 }
 
 static struct route* create_route(const char *pattern,
@@ -713,8 +550,6 @@ static void handle_request_complete(void *cls,
         enum MHD_RequestTerminationCode toe) {
     struct MHDU_Connection *mhdu_con = (struct MHDU_Connection*)*con_cls;
 
-    MHDU_LOG("ASDF");
-
     if (mhdu_con != NULL) {
         destroy_mhdu_connection(mhdu_con);
     }
@@ -753,6 +588,93 @@ static struct MHD_Response* handle_500(int *code) {
             MHD_RESPMEM_PERSISTENT);
 }
 
+#if 0
+struct MHDU_PubSubManager* MHDU_create_pubsub_manager(void) {
+    struct MHDU_PubSubManager *pubsub = calloc(1, sizeof(*pubsub));
+    if (pubsub == NULL) {
+        MHDU_LOG("Failed allocating pubsub manager.");
+        return NULL;
+    }
+
+    return pubsub;
+}
+
+void MHDU_destroy_pubsub_manager(struct MHDU_PubSubManager *pubsub) {
+    if (pthread_mutex_lock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to aquire pubsub lock.");
+    }
+
+    struct channel *channel;
+    struct channel *tmp;
+    HASH_ITER(hh, pubsub->channels, channel, tmp) {
+        HASH_DEL(pubsub->channels, channel);
+        channel->closed = 1;
+        if (pthread_cond_broadcast(&channel->cond) != 0) {
+            MHDU_ERR("Failed to broadcast condition variable.");
+        }
+    }
+
+    if (pthread_mutex_unlock(&pubsub->lock) != 0) {
+        MHDU_LOG("Failed to release pubsub lock.");
+    }
+
+    pthread_mutex_destroy(&pubsub->lock);
+
+    free(pubsub);
+}
+
+struct MHD_Response* MHDU_create_response_from_subscription(
+        struct MHDU_PubSubManager *pubsub, struct MHDU_Connection *mhdu_con,
+        const char *name, int *code, MHDU_PubSubCallback cb, void *cls) {
+
+    struct channel *channel = create_or_find_channel(pubsub, name);
+    if (channel == NULL) {
+        return NULL;
+    }
+
+    struct subscription *subscription = create_subscription(channel, cb, cls);
+    if (subscription == NULL) {
+        return NULL;
+    }
+
+    *code = MHD_HTTP_OK;
+    return MHD_create_response_from_callback(MHD_SIZE_UNKNOWN,
+            COMET_BLOCK_SIZE, pubsub_callback, subscription,
+            pubsub_free_callback);
+}
+
+int MHDU_publish_data(struct MHDU_PubSubManager *pubsub, const char *name,
+        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem) {
+    struct channel *channel = create_or_find_channel(pubsub, name);
+    if (channel == NULL) {
+        return MHD_NO;
+    }
+
+    if (pthread_mutex_lock(&channel->lock) != 0) {
+        MHDU_ERR("Failed to lock channel.");
+        return MHD_NO;
+    }
+
+    if (channel->n_subscriptions > 0) {
+        struct queue_item *item = create_queue_item(channel, (char*)data,
+                length, respmem);
+        if (item == NULL) {
+            return MHD_NO;
+        }
+
+        DL_APPEND(channel->queue, item);
+        if (pthread_cond_broadcast(&channel->cond) != 0) {
+            MHDU_ERR("Failed to broadcast condition variable.");
+        }
+        MHDU_LOG("Published to channel %s", name);
+    }
+
+    if (pthread_mutex_unlock(&channel->lock) != 0) {
+        MHDU_ERR("Failed to unlock channel.");
+    }
+
+    return MHD_YES;
+}
 static struct channel* create_or_find_channel(
         struct MHDU_PubSubManager *pubsub, const char *name) {
     if (pthread_mutex_lock(&pubsub->lock) != 0) {
@@ -1067,3 +989,4 @@ static void deref_queue_item(struct queue_item *item) {
         MHDU_ERR("Failed to unlock channel.");
     }
 }
+#endif
