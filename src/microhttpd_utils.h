@@ -61,10 +61,7 @@ struct MHDU_Router;
 /** Stores per-connection data. */
 struct MHDU_Connection;
 
-typedef struct MHD_Response* (*MHDU_RequestRouteCallback)(void *cls,
-        struct MHD_Connection *connection, const char *url, const char *method,
-        struct MHDU_Connection *mhdu_con, int *code, void **conn_cls);
-
+/** Flags for MHDU_add_route. */
 enum MHDU_METHOD {
     MHDU_METHOD_CONNECT = 1 << 0,
     MHDU_METHOD_DELETE  = 1 << 1,
@@ -76,29 +73,69 @@ enum MHDU_METHOD {
     MHDU_METHOD_TRACE   = 1 << 7,
 };
 
+/**
+ * Request handler callback.
+ *
+ * @param      cls Closure object passed to MHDU_add_route.
+ * @param      connection MHD connection object.
+ * @param      url        The URL requested by the client.
+ * @param      method     The HTTP method used by the client.
+ * @param      mhdu_con   MHDU-sepcific connection information.
+ * @param[out] code       The HTTP status code to return.
+ * @param      con_cls    Can be set by callback to data that will be preserved
+ *                        for this connection.
+ * @returns An MHD_Response to return to the client.
+ */
+typedef struct MHD_Response* (*MHDU_RequestRouteCallback)(void *cls,
+        struct MHD_Connection *connection, const char *url, const char *method,
+        struct MHDU_Connection *mhdu_con, int *code, void **con_cls);
+
+/** Callback to iterate over POST attributes. */
+typedef void (*MHDU_PostAttributeCallback)(void *cls, const char *key,
+                                           const char *value);
+
 /** Creates a new router instance. */
 struct MHDU_Router* MHDU_create_router(void);
 
 void MHDU_destroy_router(struct MHDU_Router *router);
 
 /**
- * @param url_pattern A regular expression pattern.  Caller retains ownership.
- * @param route       Caller retains ownership.
- * @param cls         Closure object passed to handlers.
+ * Adds a request route handler.
+ *
+ * The pattern can be a regular expression including groups.  Use
+ * MHDU_connection_get_matches() to get the array of strings corresponding to
+ * the groups in the pattern.
+ *
+ * @param router  an MHDU_Router instance.
+ * @param pattern A regular expression (groups allowed) to match.
+ * @param methods A combination of flags to determine which HTTP methods this
+ *                route should activate on.
+ * @param cb      The callback function for when a route matches.
+ * @param cls     Closure object passed to the callback.
  * @returns MHD_YES on success MHD_NO on failure.
  */
 int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
                    enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb,
                    void *cls);
 
-/** Set this as the MHD_AccessHandlerCallback in MHD_start_daemon. */
+/**
+ * An MHD_AccessHandlerCallback to process requests from MHD.
+ *
+ * Set this as the MHD_AccessHandlerCallback in MHD_start_daemon.
+ */
 int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
                const char *method, const char *version,
                const char *upload_data, size_t *upload_data_size,
                void **con_cls);
 
+/**
+ * Returns an array of strings for each group of a route pattern match.
+ *
+ * @param[out] nmatches Filled in with the number of items in the array.
+ */
 char** MHDU_connection_get_matches(const struct MHDU_Connection *mhdu_con,
                                    size_t *nmatches);
 
+/** Starts the MHD daemon, setting up the router as the handler callback. */
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
                                      struct MHDU_Router *router);
