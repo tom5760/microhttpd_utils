@@ -159,6 +159,7 @@ int main(int argc, char **argv) {
 
     struct MHDU_Router *router = NULL;
     struct MHD_Daemon *daemon = NULL;
+    struct MHDU_PubSubManager *pubsub = NULL;
 
     wait_fd = eventfd(0, 0);
 
@@ -177,6 +178,11 @@ int main(int argc, char **argv) {
         goto done;
     }
 
+    pubsub = MHDU_create_pubsub_manager();
+    if (pubsub == NULL) {
+        goto done;
+    }
+
     if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET, &handler1,
                        NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
@@ -188,8 +194,6 @@ int main(int argc, char **argv) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
-
-    struct MHDU_PubSubManager *pubsub = MHDU_create_pubsub_manager();
 
     if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_POST, &handler3,
                        pubsub) != MHD_YES) {
