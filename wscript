@@ -34,6 +34,7 @@ def options(ctx):
 
 def configure(ctx):
     ctx.load('compiler_c')
+    ctx.check_cc(lib='pthread')
     ctx.check_cc(lib='microhttpd')
 
     if ctx.env.CC_NAME == 'gcc':
@@ -49,7 +50,7 @@ def configure(ctx):
 def build(ctx):
     ctx.stlib(
         target = 'microhttpd_utils',
-        use = 'MICROHTTPD',
+        use = ['PTHREAD', 'MICROHTTPD'],
         includes = [
             'deps/tj-tools/src',
             'deps/uthash/src',

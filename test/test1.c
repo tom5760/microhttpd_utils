@@ -80,7 +80,7 @@ static struct MHD_Response* handler2(void *cls,
     static const char *page =
         "<html>"
             "<body>"
-                "<form action='/test' method='POST'>"
+                "<form action='/publish' method='POST'>"
                     "<input type='text' name='foo'/>"
                     "<input type='submit' name='submit' value='Submit'/>"
                 "</form>"
@@ -101,6 +101,8 @@ static void handler3_cb(void *cls, const char *key, const char *value,
 static struct MHD_Response* handler3(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
+    struct MHDU_PubSubManager *pubsub = (struct MHDU_PubSubManager*)cls;
+
     UT_string page;
     utstring_init(&page);
 
@@ -110,9 +112,35 @@ static struct MHD_Response* handler3(void *cls,
 
     utstring_printf(&page, "</ul></body></html>");
 
+    MHDU_publish_data(pubsub, "sub1", utstring_body(&page),
+                     utstring_len(&page));
+
     *code = MHD_HTTP_OK;
     return MHD_create_response_from_buffer(utstring_len(&page),
             utstring_body(&page), MHD_RESPMEM_MUST_FREE);
+}
+
+static ssize_t handler4_cb(void *cls, const char *channel, const char *value,
+                           size_t length, char *buf, size_t max) {
+    MHDU_LOG("FOOOOO");
+    size_t n;
+    if (length > max) {
+        n = max;
+    } else {
+        n = length;
+    }
+    memcpy(buf, value, n);
+    return n;
+}
+
+static struct MHD_Response* handler4(void *cls,
+        struct MHD_Connection *connection, const char *url, const char *method,
+        struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
+
+    struct MHDU_PubSubManager *pubsub = (struct MHDU_PubSubManager*)cls;
+
+    return MHDU_create_response_from_subscription(pubsub, mhdu_con, "sub1",
+            code, &handler4_cb, pubsub);
 }
 
 int main(int argc, char **argv) {
@@ -155,14 +183,22 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/test$", MHDU_METHOD_GET, &handler2,
+    if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_GET, &handler2,
                        NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/test$", MHDU_METHOD_POST, &handler3,
-                       NULL) != MHD_YES) {
+    struct MHDU_PubSubManager *pubsub = MHDU_create_pubsub_manager();
+
+    if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_POST, &handler3,
+                       pubsub) != MHD_YES) {
+        MHDU_ERR("Failed to add route.");
+        goto done;
+    }
+
+    if (MHDU_add_route(router, "^/subscribe$", MHDU_METHOD_GET, &handler4,
+                       pubsub) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
@@ -192,6 +228,7 @@ done:
 
     close(wait_fd);
     MHD_stop_daemon(daemon);
+    MHDU_destroy_pubsub_manager(pubsub);
     MHDU_destroy_router(router);
     return 0;
 }
