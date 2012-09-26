@@ -81,25 +81,18 @@ static struct MHD_Response* publish_get(void *cls,
     static const char *page =
         "<html>"
             "<body>"
-                "<p>Publishing to channel: <b>%1$s</b></p>"
-                "<form action='/publish/%1$s' method='POST'>"
+                "<p>Publishing to channel:</p>"
+                "<form action='/publish' method='POST'>"
                     "<input type='text' name='message'/>"
                     "<input type='submit' name='submit' value='Submit'/>"
                 "</form>"
             "</body>"
         "</html>";
 
-    size_t nmatches = 0;
-    char **matches = MHDU_connection_get_matches(mhdu_con, &nmatches);
-    if (nmatches != 2) {
-        MHDU_ERR("Wrong number of matches!");
-        return NULL;
-    }
-
     /* +1 for null terminator. */
-    size_t page_len = strlen(page) + strlen(matches[1]) + 1;
+    size_t page_len = strlen(page) + 1;
     char render_page[page_len];
-    snprintf(render_page, page_len, page, matches[1]);
+    snprintf(render_page, page_len, page);
 
     *code = MHD_HTTP_OK;
     return MHD_create_response_from_buffer(strlen(render_page), render_page,
@@ -120,30 +113,22 @@ static struct MHD_Response* publish_post(void *cls,
     UT_string page;
     utstring_init(&page);
 
-    size_t nmatches = 0;
-    char **matches = MHDU_connection_get_matches(mhdu_con, &nmatches);
-    if (nmatches != 2) {
-        MHDU_ERR("Wrong number of matches!");
-        return NULL;
-    }
-
-    utstring_printf(&page, "<html><body><p>POST to channel: %s</p><ul>\n",
-            matches[1]);
+    utstring_printf(&page, "<html><body><p>POST to channel: %s</p><ul>\n");
 
     MHDU_attributes_iter(mhdu_con, &publish_post_cb, &page);
 
     utstring_printf(&page, "</ul></body></html>");
 
-    MHDU_publish_data(pubsub, matches[1], utstring_body(&page),
-            utstring_len(&page), MHD_RESPMEM_MUST_COPY);
+    MHDU_publish_data(pubsub, utstring_body(&page), utstring_len(&page),
+            MHD_RESPMEM_MUST_COPY);
 
     *code = MHD_HTTP_OK;
     return MHD_create_response_from_buffer(utstring_len(&page),
             utstring_body(&page), MHD_RESPMEM_MUST_FREE);
 }
 
-static ssize_t subscribe_cb(void *cls, const char *channel, const char *value,
-        size_t length, size_t offset, char *buf, size_t max) {
+static ssize_t subscribe_cb(void *cls, const char *value, size_t length,
+        size_t offset, char *buf, size_t max) {
     size_t n;
     size_t left = length - offset;
 
@@ -163,15 +148,8 @@ static struct MHD_Response* subscribe(void *cls,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
     struct MHDU_PubSub *pubsub = (struct MHDU_PubSub*)cls;
 
-    size_t nmatches = 0;
-    char **matches = MHDU_connection_get_matches(mhdu_con, &nmatches);
-    if (nmatches != 2) {
-        MHDU_ERR("Wrong number of matches!");
-        return NULL;
-    }
-
-    return MHDU_create_response_from_subscription(pubsub, mhdu_con, matches[1],
-            code, &subscribe_cb, pubsub);
+    return MHDU_create_response_from_subscription(pubsub, mhdu_con, code,
+            &subscribe_cb, pubsub);
 }
 
 int main(int argc, char **argv) {
@@ -209,7 +187,7 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    pubsub = MHDU_create_pubsub();
+    pubsub = MHDU_start_pubsub();
     if (pubsub == NULL) {
         goto done;
     }
@@ -220,19 +198,19 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/publish/\\(.*\\)$", MHDU_METHOD_GET,
+    if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_GET,
                 &publish_get, NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/publish/\\(.*\\)$", MHDU_METHOD_POST,
+    if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_POST,
                 &publish_post, pubsub) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/subscribe/\\(.*\\)$", MHDU_METHOD_GET,
+    if (MHDU_add_route(router, "^/subscribe$", MHDU_METHOD_GET,
                 &subscribe, pubsub) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
@@ -266,8 +244,8 @@ done:
     printf("Shutting down server.");
 
     close(wait_fd);
-    MHDU_destroy_pubsub(pubsub);
     MHDU_destroy_router(router);
+    MHDU_stop_pubsub(pubsub);
     MHD_stop_daemon(daemon);
     return 0;
 }

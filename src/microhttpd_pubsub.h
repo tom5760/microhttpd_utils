@@ -62,7 +62,6 @@ struct MHDU_PubSub;
 /**
  * Callback when a subscription fires.
  *
- * @param chan_name   Name of the channel for the current event.
  * @param data        Published data.
  * @param data_length Total size of published data.
  * @param offset      Amount read by previous calls to this callback.
@@ -70,13 +69,12 @@ struct MHDU_PubSub;
  * @param max         Maximum amount of data that can be copied to buf.
  * @returns Amount of data written to buf.
  */
-typedef ssize_t (*MHDU_PubSubCallback)(void *cls, const char *chan_name,
-        const char *data, size_t data_length, size_t offset,
-        char *buf, size_t max);
+typedef ssize_t (*MHDU_PubSubCallback)(void *cls, const char *data,
+        size_t data_length, size_t offset, char *buf, size_t max);
 
-struct MHDU_PubSub* MHDU_create_pubsub(void);
+struct MHDU_PubSub* MHDU_start_pubsub(void);
 
-void MHDU_destroy_pubsub(struct MHDU_PubSub *pubsub);
+void MHDU_stop_pubsub(struct MHDU_PubSub *pubsub);
 
 /**
  * Creates an response that will call cb when data is published to the channel.
@@ -86,7 +84,7 @@ void MHDU_destroy_pubsub(struct MHDU_PubSub *pubsub);
  */
 struct MHD_Response* MHDU_create_response_from_subscription(
         struct MHDU_PubSub *pubsub, struct MHDU_Connection *mhdu_con,
-        const char *chan_name, int *code, MHDU_PubSubCallback cb, void *cls);
+        int *code, MHDU_PubSubCallback cb, void *cls);
 
 /**
  * Asynchronously send data to a channel.
@@ -94,5 +92,5 @@ struct MHD_Response* MHDU_create_response_from_subscription(
  * @param chan_name Name of the channel to publish to.
  * @param respmem   How to treat the data being published.
  */
-int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *chan_name,
-        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem);
+int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *data,
+        size_t length, enum MHD_ResponseMemoryMode respmem);

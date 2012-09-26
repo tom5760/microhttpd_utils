@@ -29,10 +29,10 @@
  * Uses COMET or HTML5 Server Sent Event-style long-lived HTTP connections.
  */
 
+#include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <signal.h>
 
 #include <uthash.h>
 #include <utlist.h>
@@ -66,11 +66,11 @@ struct queue_item {
 
 /** A particular client subscription on a channel. */
 struct subscription {
+    /** The pubsub instance this subscription is on. */
+    struct MHDU_PubSub *pubsub;
+
     MHDU_PubSubCallback callback;
     void *cls;
-
-    /** The channel this subscription is on. */
-    struct channel *channel;
 
     /** The items in this subscription's message queue. */
     struct queue_item *queue;
@@ -86,48 +86,29 @@ struct subscription {
     struct subscription *next;
 };
 
-/** Holds all the subscribers to a particular channel. */
-struct channel {
-    /** Channel name */
-    char *name;
-
-    /** The pubsub instance managing this channel. */
-    struct MHDU_PubSub *pubsub;
-
+/** Holds all the subscribers to a particular pubsub instance. */
+struct MHDU_PubSub {
     /** The subscriptions on this channel. */
-    struct subscription *subscriptions;
+    struct subscription *subs;
+
+    /** Number of subscriptions. */
+    unsigned int num_subs;
 
     /** Lock protecting access to subscriptions. */
     pthread_mutex_t lock;
 
-    /** Set when this channel is closed. */
-    sig_atomic_t closed;
-
-    /** Items stored in a hash table. */
-    UT_hash_handle hh;
+    /** Whether this pubsub instance has shut down. */
+    bool closed;
 };
 
-struct MHDU_PubSub {
-    /** All active channels. */
-    struct channel *channels;
-
-    /** Lock protecting access to channels */
-    pthread_mutex_t lock;
-};
+static void destroy_pubsub(struct MHDU_PubSub *pubsub);
 
 static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf, size_t max);
 static void pubsub_free_callback(void *cls);
 
-static struct channel* create_channel(struct MHDU_PubSub *pubsub,
-        const char *name);
-static void destroy_channel(struct channel *channel);
-static struct channel* find_channel(struct MHDU_PubSub *pubsub,
-        const char *name);
-static unsigned int num_subscriptions(struct channel *channel);
-
-static struct subscription* create_subscription(struct channel *channel,
+static struct subscription* create_subscription(struct MHDU_PubSub *pubsub,
         MHDU_PubSubCallback callback, void *cls);
-static void destroy_subscription(struct subscription *subscription);
+static void destroy_subscription(struct subscription *sub);
 
 static struct queue_item* create_queue_item(struct message *message);
 static void destroy_queue_item(struct queue_item *item);
@@ -139,248 +120,181 @@ static void destroy_message(struct message *message);
 static void ref_message(struct message *message);
 static void unref_message(struct message *message);
 
-struct MHDU_PubSub* MHDU_create_pubsub(void) {
+struct MHDU_PubSub* MHDU_start_pubsub(void) {
     struct MHDU_PubSub *pubsub = calloc(1, sizeof(*pubsub));
     if (pubsub == NULL) {
         MHDU_ERR("Failed to allocate pubsub.");
         return NULL;
     }
 
+    pubsub->num_subs = 0;
     pubsub->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    pubsub->closed = false;
 
     return pubsub;
 }
 
-void MHDU_destroy_pubsub(struct MHDU_PubSub *pubsub) {
+void MHDU_stop_pubsub(struct MHDU_PubSub *pubsub) {
     pthread_mutex_lock(&pubsub->lock);
-
-    struct channel *channel, *channel_tmp;
-    HASH_ITER(hh, pubsub->channels, channel, channel_tmp) {
-        HASH_DEL(pubsub->channels, channel);
-        channel->closed = 1;
-
-        pthread_mutex_lock(&channel->lock);
-        struct subscription *sub, *sub_tmp;
-        DL_FOREACH_SAFE(channel->subscriptions, sub, sub_tmp) {
-            pthread_cond_broadcast(&sub->cond);
-        }
-        pthread_mutex_unlock(&channel->lock);
+    pubsub->closed = true;
+    struct subscription *sub, *tmp;
+    DL_FOREACH_SAFE(pubsub->subs, sub, tmp) {
+        pthread_cond_broadcast(&sub->cond);
     }
-
     pthread_mutex_unlock(&pubsub->lock);
-    free(pubsub);
 }
 
 struct MHD_Response* MHDU_create_response_from_subscription(
         struct MHDU_PubSub *pubsub, struct MHDU_Connection *mhdu_con,
-        const char *chan_name, int *code, MHDU_PubSubCallback cb, void *cls) {
-
+        int *code, MHDU_PubSubCallback cb, void *cls) {
     pthread_mutex_lock(&pubsub->lock);
-    struct channel *channel = find_channel(pubsub, chan_name);
-    if (channel != NULL && channel->closed) {
-        MHDU_ERR("Channel is closing.");
+    struct subscription *sub = create_subscription(pubsub, cb, cls);
+    if (sub == NULL) {
+        pthread_mutex_unlock(&pubsub->lock);
         return NULL;
     }
-    if (channel == NULL) {
-        channel = create_channel(pubsub, chan_name);
-    }
+    DL_APPEND(pubsub->subs, sub);
+    pubsub->num_subs++;
     pthread_mutex_unlock(&pubsub->lock);
-    if (channel == NULL) {
-        return NULL;
-    }
-
-    pthread_mutex_lock(&channel->lock);
-    struct subscription *subscription = create_subscription(channel, cb, cls);
-    if (subscription == NULL) {
-        if (num_subscriptions(channel) == 0) {
-            pthread_mutex_lock(&pubsub->lock);
-            destroy_channel(channel);
-            pthread_mutex_unlock(&pubsub->lock);
-        }
-        pthread_mutex_unlock(&channel->lock);
-        return NULL;
-    }
-    DL_APPEND(channel->subscriptions, subscription);
-    pthread_mutex_unlock(&channel->lock);
 
     *code = MHD_HTTP_OK;
     return MHD_create_response_from_callback(MHD_SIZE_UNKNOWN,
-            PUBSUB_BLOCK_SIZE, pubsub_callback, subscription,
-            pubsub_free_callback);
+            PUBSUB_BLOCK_SIZE, pubsub_callback, sub, pubsub_free_callback);
 }
 
-int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *name,
-        const char *data, size_t length, enum MHD_ResponseMemoryMode respmem) {
-    pthread_mutex_lock(&pubsub->lock);
-    struct channel *channel = find_channel(pubsub, name);
-    pthread_mutex_unlock(&pubsub->lock);
-    if (channel == NULL) {
-        MHDU_LOG("No subscriptions for channel %s", name);
-        return MHD_YES;
-    }
-
-    struct message *message = create_message((char*)data, length, respmem);
-    if (message == NULL) {
+int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *data,
+        size_t length, enum MHD_ResponseMemoryMode respmem) {
+    struct message *msg = create_message((char*)data, length, respmem);
+    if (msg == NULL) {
         MHDU_LOG("Failed to create message.");
         return MHD_NO;
     }
 
-    pthread_mutex_lock(&channel->lock);
-    struct subscription *subscription;
-    DL_FOREACH(channel->subscriptions, subscription) {
-        struct queue_item *item = create_queue_item(message);
+    pthread_mutex_lock(&pubsub->lock);
+    struct subscription *sub, *tmp;
+    DL_FOREACH_SAFE(pubsub->subs, sub, tmp) {
+        struct queue_item *item = create_queue_item(msg);
         if (item == NULL) {
             MHDU_LOG("Failed to create queue item.");
             continue;
         }
-        pthread_mutex_lock(&subscription->lock);
-        DL_APPEND(subscription->queue, item);
-        pthread_cond_broadcast(&subscription->cond);
-        pthread_mutex_unlock(&subscription->lock);
+        pthread_mutex_lock(&sub->lock);
+        DL_APPEND(sub->queue, item);
+        pthread_cond_broadcast(&sub->cond);
+        pthread_mutex_unlock(&sub->lock);
     }
-    pthread_mutex_unlock(&channel->lock);
+    pthread_mutex_unlock(&pubsub->lock);
 
     return MHD_YES;
 }
 
+static void destroy_pubsub(struct MHDU_PubSub *pubsub) {
+    pthread_mutex_lock(&pubsub->lock);
+    if (!pubsub->closed) {
+        MHDU_ERR("Pubsub not closed!");
+    }
+    if (pubsub->num_subs > 0) {
+        MHDU_ERR("Pubsub not empty!");
+    }
+    pthread_mutex_unlock(&pubsub->lock);
+    pthread_mutex_destroy(&pubsub->lock);
+}
+
 static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf,
         size_t max) {
-    struct subscription *subscription = (struct subscription*)cls;
+    struct subscription *sub = (struct subscription*)cls;
+    struct MHDU_PubSub *pubsub = sub->pubsub;
 
-    if (subscription->channel->closed) {
+    pthread_mutex_lock(&pubsub->lock);
+    if (sub->pubsub->closed) {
+        pthread_mutex_unlock(&pubsub->lock);
         return MHD_CONTENT_READER_END_OF_STREAM;
+    } else {
+        pthread_mutex_unlock(&pubsub->lock);
     }
 
-    pthread_mutex_lock(&subscription->lock);
-    if (subscription->queue == NULL) {
-        pthread_cond_wait(&subscription->cond, &subscription->lock);
+    pthread_mutex_lock(&sub->lock);
+    if (sub->queue == NULL) {
+        pthread_cond_wait(&sub->cond, &sub->lock);
 
         /* Nobody removes items from the queue except for this function, so its
          * safe to look at the first item without a lock. */
-        pthread_mutex_unlock(&subscription->lock);
+        pthread_mutex_unlock(&sub->lock);
 
-        if (subscription->channel->closed) {
+        pthread_mutex_lock(&pubsub->lock);
+        if (sub->pubsub->closed) {
+            pthread_mutex_unlock(&pubsub->lock);
             return MHD_CONTENT_READER_END_OF_STREAM;
+        } else {
+            pthread_mutex_unlock(&pubsub->lock);
         }
     }
 
-    struct queue_item *item = subscription->queue;
+    struct queue_item *item = sub->queue;
     struct message *message = item->message;
 
-    size_t rv = subscription->callback(subscription->cls,
-            subscription->channel->name, message->data, message->length,
+    size_t rv = sub->callback(sub->cls, message->data, message->length,
             item->num_read, buf, max);
     item->num_read += rv;
 
     if (item->num_read == message->length) {
-        pthread_mutex_lock(&subscription->lock);
+        pthread_mutex_lock(&sub->lock);
         /* Pop the top element off the queue. */
-        DL_DELETE(subscription->queue, item);
-        pthread_mutex_unlock(&subscription->lock);
+        DL_DELETE(sub->queue, item);
+        pthread_mutex_unlock(&sub->lock);
 
-        pthread_mutex_lock(&subscription->channel->lock);
+        pthread_mutex_lock(&sub->pubsub->lock);
         destroy_queue_item(item);
-        pthread_mutex_unlock(&subscription->channel->lock);
+        pthread_mutex_unlock(&sub->pubsub->lock);
     }
 
     return rv;
 }
 
 static void pubsub_free_callback(void *cls) {
-    struct subscription *subscription = (struct subscription*)cls;
-    struct channel *channel = subscription->channel;
-
-    pthread_mutex_lock(&channel->lock);
-    DL_DELETE(channel->subscriptions, subscription);
     destroy_subscription((struct subscription*)cls);
-
-    if (num_subscriptions(channel) == 0) {
-        pthread_mutex_unlock(&channel->lock);
-        destroy_channel(channel);
-    } else {
-        pthread_mutex_unlock(&channel->lock);
-    }
 }
 
-static struct channel* create_channel(struct MHDU_PubSub *pubsub,
-        const char *name) {
-    struct channel *channel = calloc(1, sizeof(*channel));
-    if (channel == NULL) {
-        MHDU_ERR("Failed to allocate channel.");
-        return NULL;
-    }
-
-    channel->name = strdup(name);
-    if (channel->name == NULL) {
-        MHDU_ERR("Failed to duplicate channel name.");
-        goto error;
-    }
-
-    channel->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-
-    HASH_ADD_KEYPTR(hh, pubsub->channels, channel->name,
-            strlen(channel->name), channel);
-    channel->pubsub = pubsub;
-
-    return channel;
-
-error:
-    destroy_channel(channel);
-    return NULL;
-}
-
-static void destroy_channel(struct channel *channel) {
-    pthread_mutex_destroy(&channel->lock);
-    free(channel->name);
-    free(channel);
-}
-
-static struct channel *find_channel(struct MHDU_PubSub *pubsub,
-        const char *name) {
-    struct channel *channel;
-    HASH_FIND_STR(pubsub->channels, name, channel);
-    return channel;
-}
-
-static unsigned int num_subscriptions(struct channel *channel) {
-    int num = 0;
-    struct subscription *subscription;
-    DL_FOREACH(channel->subscriptions, subscription) {
-        num++;
-    }
-    return num;
-}
-
-static struct subscription* create_subscription(struct channel *channel,
+static struct subscription* create_subscription(struct MHDU_PubSub *pubsub,
         MHDU_PubSubCallback callback, void *cls) {
-    struct subscription *subscription = calloc(1, sizeof(*subscription));
-    if (subscription == NULL) {
-        MHDU_ERR("Failed to allocate subscription.");
+    struct subscription *sub = calloc(1, sizeof(*sub));
+    if (sub == NULL) {
+        MHDU_ERR("Failed to allocate sub.");
         return NULL;
     }
 
-    subscription->channel = channel;
-    subscription->callback = callback;
-    subscription->cls = cls;
+    sub->pubsub = pubsub;
+    sub->callback = callback;
+    sub->cls = cls;
 
-    subscription->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    subscription->cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+    sub->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    sub->cond = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 
-    return subscription;
+    return sub;
 }
 
-static void destroy_subscription(struct subscription *subscription) {
-    pthread_mutex_lock(&subscription->lock);
-    struct queue_item *item, *tmp;
-    DL_FOREACH_SAFE(subscription->queue, item, tmp) {
-        DL_DELETE(subscription->queue, item);
+static void destroy_subscription(struct subscription *sub) {
+    pthread_mutex_lock(&sub->lock);
+    struct queue_item *item, *item_tmp;
+    DL_FOREACH_SAFE(sub->queue, item, item_tmp) {
+        DL_DELETE(sub->queue, item);
         destroy_queue_item(item);
     }
-    pthread_mutex_unlock(&subscription->lock);
+    pthread_mutex_unlock(&sub->lock);
 
-    pthread_mutex_destroy(&subscription->lock);
-    pthread_cond_destroy(&subscription->cond);
-    free(subscription);
+    pthread_mutex_lock(&sub->pubsub->lock);
+    DL_DELETE(sub->pubsub->subs, sub);
+    sub->pubsub->num_subs--;
+    if (sub->pubsub->num_subs == 0 && sub->pubsub->closed) {
+        pthread_mutex_unlock(&sub->pubsub->lock);
+        destroy_pubsub(sub->pubsub);
+    } else {
+        pthread_mutex_unlock(&sub->pubsub->lock);
+    }
+
+    pthread_cond_destroy(&sub->cond);
+    pthread_mutex_destroy(&sub->lock);
+    free(sub);
 }
 
 static struct queue_item* create_queue_item(struct message *message) {
