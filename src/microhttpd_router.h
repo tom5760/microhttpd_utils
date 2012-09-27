@@ -23,8 +23,8 @@
  */
 
 /**
- * @file microhttpd_utils.h
- * Simple add-ons for microhttpd to take care of common needs.
+ * @file microhttpd_router.h
+ * Regular expression-based URL Routing and connection management.
  *
  * Takes care of stuff like request routing, parsing POST items, etc.
  */
@@ -37,16 +37,16 @@
 
 #ifndef NDEBUG
 #  ifdef __ANDROID__
-#    define MHDU_LOG(M, ...) { __android_log_print(ANDROID_LOG_DEBUG, "MHDU", M, ##__VA_ARGS__); }
+#    define MHDU_LOG(M, ...) { __android_log_print(ANDROID_LOG_DEBUG, "MHDU_Router", M, ##__VA_ARGS__); }
 #  else
-#    define MHDU_LOG(M, ...) { fprintf(stdout, "%s: " M "\n", __FUNCTION__, ##__VA_ARGS__); }
+#    define MHDU_LOG(M, ...) { fprintf(stderr, "%s: " M "\n", __FUNCTION__, ##__VA_ARGS__); }
 #  endif
 #else
 #  define MHDU_LOG(M, ...)
 #endif
 
 #ifdef __ANDROID__
-#  define MHDU_ERR(M, ...) { __android_log_print(ANDROID_LOG_ERROR, "MHDU", M, ##__VA_ARGS__); }
+#  define MHDU_ERR(M, ...) { __android_log_print(ANDROID_LOG_ERROR, "MHDU_Router", M, ##__VA_ARGS__); }
 #else
 #  define MHDU_ERR(M, ...) { fprintf(stderr, "[ERROR] %s: " M "\n", __FUNCTION__, ##__VA_ARGS__); }
 #endif
@@ -92,7 +92,7 @@ typedef struct MHD_Response* (*MHDU_RequestRouteCallback)(void *cls,
 
 /** Callback to iterate over GET/POST attributes. */
 typedef void (*MHDU_AttributeCallback)(void *cls, const char *key,
-                                       const char *value, size_t length);
+        const char *value, size_t length);
 
 /** Creates a new router instance. */
 struct MHDU_Router* MHDU_create_router(void);
@@ -115,8 +115,7 @@ void MHDU_destroy_router(struct MHDU_Router *router);
  * @returns MHD_YES on success MHD_NO on failure.
  */
 int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
-                   enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb,
-                   void *cls);
+        enum MHDU_METHOD methods, MHDU_RequestRouteCallback cb, void *cls);
 
 /**
  * An MHD_AccessHandlerCallback to process requests from MHD.
@@ -124,9 +123,8 @@ int MHDU_add_route(struct MHDU_Router *router, const char *pattern,
  * Set this as the MHD_AccessHandlerCallback in MHD_start_daemon.
  */
 int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
-               const char *method, const char *version,
-               const char *upload_data, size_t *upload_data_size,
-               void **con_cls);
+        const char *method, const char *version, const char *upload_data,
+        size_t *upload_data_size, void **con_cls);
 
 /**
  * Returns an array of strings for each group of a route pattern match.
@@ -134,16 +132,16 @@ int MHDU_route(void *cls, struct MHD_Connection *connection, const char *url,
  * @param[out] nmatches Filled in with the number of items in the array.
  */
 char** MHDU_connection_get_matches(const struct MHDU_Connection *mhdu_con,
-                                   size_t *nmatches);
+        size_t *nmatches);
 
 /** Iterate over the attributes in a request. */
 void MHDU_attributes_iter(const struct MHDU_Connection *mhdu_con,
-                          MHDU_AttributeCallback cb, void *cls);
+        MHDU_AttributeCallback cb, void *cls);
 
 /** Get a specific attribute in a request. */
 void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
-                        const char *key, const char **value, size_t *length);
+        const char *key, const char **value, size_t *length);
 
 /** Starts the MHD daemon, setting up the router as the handler callback. */
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
-                                     struct MHDU_Router *router);
+        struct MHDU_Router *router);

@@ -38,7 +38,8 @@
 #include <utstring.h>
 
 #include <microhttpd.h>
-#include "microhttpd_utils.h"
+#include "microhttpd_router.h"
+#include "microhttpd_pubsub.h"
 
 static const uint16_t DEFAULT_PORT = 6892;
 
@@ -51,7 +52,7 @@ static void signal_handler(int signal) {
     }
 }
 
-static struct MHD_Response* handler1(void *cls,
+static struct MHD_Response* test_get1(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
     UT_string page;
@@ -74,14 +75,15 @@ static struct MHD_Response* handler1(void *cls,
             utstring_body(&page), MHD_RESPMEM_MUST_FREE);
 }
 
-static struct MHD_Response* handler2(void *cls,
+static struct MHD_Response* publish_get(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
     static const char *page =
         "<html>"
             "<body>"
-                "<form action='/test' method='POST'>"
-                    "<input type='text' name='foo'/>"
+                "<p>Publishing to channel:</p>"
+                "<form action='/publish' method='POST'>"
+                    "<input type='text' name='message'/>"
                     "<input type='submit' name='submit' value='Submit'/>"
                 "</form>"
             "</body>"
@@ -92,27 +94,57 @@ static struct MHD_Response* handler2(void *cls,
             MHD_RESPMEM_PERSISTENT);
 }
 
-static void handler3_cb(void *cls, const char *key, const char *value,
-                        size_t length) {
+static void publish_post_cb(void *cls, const char *key, const char *value,
+        size_t length) {
     UT_string *page = (UT_string*)cls;
     utstring_printf(page, "\t<li><b>%s:</b> %.*s</li>\n", key, length, value);
 }
 
-static struct MHD_Response* handler3(void *cls,
+static struct MHD_Response* publish_post(void *cls,
         struct MHD_Connection *connection, const char *url, const char *method,
         struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
+    struct MHDU_PubSub *pubsub = (struct MHDU_PubSub*)cls;
+
     UT_string page;
     utstring_init(&page);
 
-    utstring_printf(&page, "<html><body><p>POST:</p><ul>\n");
+    utstring_printf(&page, "<html><body><p>POST to channel: %s</p><ul>\n");
 
-    MHDU_attributes_iter(mhdu_con, &handler3_cb, &page);
+    MHDU_attributes_iter(mhdu_con, &publish_post_cb, &page);
 
     utstring_printf(&page, "</ul></body></html>");
+
+    MHDU_publish_data(pubsub, utstring_body(&page), utstring_len(&page),
+            MHD_RESPMEM_MUST_COPY);
 
     *code = MHD_HTTP_OK;
     return MHD_create_response_from_buffer(utstring_len(&page),
             utstring_body(&page), MHD_RESPMEM_MUST_FREE);
+}
+
+static ssize_t subscribe_cb(void *cls, const char *value, size_t length,
+        size_t offset, char *buf, size_t max) {
+    size_t n;
+    size_t left = length - offset;
+
+    MHDU_LOG("Length: %zd, Offset: %zd, Max: %zd", length, offset, max);
+    if (left > max) {
+        n = max;
+    } else {
+        n = left;
+    }
+    MHDU_LOG("Copying %zd bytes", n);
+    memcpy(buf, value + offset, n);
+    return n;
+}
+
+static struct MHD_Response* subscribe(void *cls,
+        struct MHD_Connection *connection, const char *url, const char *method,
+        struct MHDU_Connection *mhdu_con, int *code, void **conn_cls) {
+    struct MHDU_PubSub *pubsub = (struct MHDU_PubSub*)cls;
+
+    return MHDU_create_response_from_subscription(pubsub, mhdu_con, code,
+            &subscribe_cb, pubsub);
 }
 
 int main(int argc, char **argv) {
@@ -131,6 +163,7 @@ int main(int argc, char **argv) {
 
     struct MHDU_Router *router = NULL;
     struct MHD_Daemon *daemon = NULL;
+    struct MHDU_PubSub *pubsub = NULL;
 
     wait_fd = eventfd(0, 0);
 
@@ -141,7 +174,7 @@ int main(int argc, char **argv) {
 
     struct pollfd poll_fds[] = {{
         .fd = wait_fd,
-        .events = POLLIN,
+            .events = POLLIN,
     }};
 
     router = MHDU_create_router();
@@ -149,20 +182,31 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET, &handler1,
-                       NULL) != MHD_YES) {
+    pubsub = MHDU_start_pubsub();
+    if (pubsub == NULL) {
+        goto done;
+    }
+
+    if (MHDU_add_route(router, "^/\\(.*\\)/query$", MHDU_METHOD_GET,
+                &test_get1, NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/test$", MHDU_METHOD_GET, &handler2,
-                       NULL) != MHD_YES) {
+    if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_GET,
+                &publish_get, NULL) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
 
-    if (MHDU_add_route(router, "^/test$", MHDU_METHOD_POST, &handler3,
-                       NULL) != MHD_YES) {
+    if (MHDU_add_route(router, "^/publish$", MHDU_METHOD_POST,
+                &publish_post, pubsub) != MHD_YES) {
+        MHDU_ERR("Failed to add route.");
+        goto done;
+    }
+
+    if (MHDU_add_route(router, "^/subscribe$", MHDU_METHOD_GET,
+                &subscribe, pubsub) != MHD_YES) {
         MHDU_ERR("Failed to add route.");
         goto done;
     }
@@ -183,6 +227,10 @@ int main(int argc, char **argv) {
             break;
         }
         if (poll_fds[0].revents & POLLIN) {
+            uint64_t x;
+            if (read(wait_fd, &x, sizeof(x)) == -1) {
+                MHDU_ERR("Failed to read from event file descriptor.");
+            }
             break;
         }
     }
@@ -191,6 +239,7 @@ done:
     printf("Shutting down server.");
 
     close(wait_fd);
+    MHDU_stop_pubsub(pubsub);
     MHD_stop_daemon(daemon);
     MHDU_destroy_router(router);
     return 0;
