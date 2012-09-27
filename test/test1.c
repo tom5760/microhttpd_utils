@@ -89,14 +89,9 @@ static struct MHD_Response* publish_get(void *cls,
             "</body>"
         "</html>";
 
-    /* +1 for null terminator. */
-    size_t page_len = strlen(page) + 1;
-    char render_page[page_len];
-    snprintf(render_page, page_len, page);
-
     *code = MHD_HTTP_OK;
-    return MHD_create_response_from_buffer(strlen(render_page), render_page,
-            MHD_RESPMEM_MUST_COPY);
+    return MHD_create_response_from_buffer(strlen(page), page,
+            MHD_RESPMEM_PERSISTENT);
 }
 
 static void publish_post_cb(void *cls, const char *key, const char *value,
