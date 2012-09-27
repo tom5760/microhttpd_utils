@@ -90,7 +90,7 @@ static struct MHD_Response* publish_get(void *cls,
         "</html>";
 
     *code = MHD_HTTP_OK;
-    return MHD_create_response_from_buffer(strlen(page), page,
+    return MHD_create_response_from_buffer(strlen(page), (char*)page,
             MHD_RESPMEM_PERSISTENT);
 }
 
