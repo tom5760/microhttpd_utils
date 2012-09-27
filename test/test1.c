@@ -239,8 +239,8 @@ done:
     printf("Shutting down server.");
 
     close(wait_fd);
-    MHDU_destroy_router(router);
     MHDU_stop_pubsub(pubsub);
     MHD_stop_daemon(daemon);
+    MHDU_destroy_router(router);
     return 0;
 }
