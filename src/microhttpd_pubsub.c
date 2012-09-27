@@ -164,13 +164,19 @@ struct MHD_Response* MHDU_create_response_from_subscription(
 
 int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *data,
         size_t length, enum MHD_ResponseMemoryMode respmem) {
+    pthread_mutex_lock(&pubsub->lock);
+    if (pubsub->num_subs == 0) {
+        pthread_mutex_unlock(&pubsub->lock);
+        /* No subscribers, not an error. */
+        return MHD_YES;
+    }
+
     struct message *msg = create_message((char*)data, length, respmem);
     if (msg == NULL) {
         MHDU_LOG("Failed to create message.");
         return MHD_NO;
     }
 
-    pthread_mutex_lock(&pubsub->lock);
     struct subscription *sub, *tmp;
     DL_FOREACH_SAFE(pubsub->subs, sub, tmp) {
         struct queue_item *item = create_queue_item(msg);
