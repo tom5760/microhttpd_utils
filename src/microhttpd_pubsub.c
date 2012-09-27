@@ -198,6 +198,7 @@ static void destroy_pubsub(struct MHDU_PubSub *pubsub) {
     }
     pthread_mutex_unlock(&pubsub->lock);
     pthread_mutex_destroy(&pubsub->lock);
+    free(pubsub);
 }
 
 static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf,
