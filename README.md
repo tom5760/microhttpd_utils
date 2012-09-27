@@ -20,6 +20,7 @@ Features
 Currently implemented:
  * Regular-expression based URL routing.
  * Uniform access to GET and POST values.
+ * Publish-subscribe framework using long-lived HTTP connections.
 
 Requirements
 ------------
