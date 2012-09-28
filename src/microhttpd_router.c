@@ -323,7 +323,7 @@ static struct route* create_route(const char *pattern,
         goto error;
     }
 
-    int rv = regcomp(&route->regex, pattern, 0);
+    int rv = regcomp(&route->regex, pattern, REG_EXTENDED);
     if (rv != 0) {
         char error[256];
         regerror(rv, &route->regex, error, 256);
