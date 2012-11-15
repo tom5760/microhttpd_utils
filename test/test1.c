@@ -144,7 +144,7 @@ static struct MHD_Response* subscribe(void *cls,
     struct MHDU_PubSub *pubsub = (struct MHDU_PubSub*)cls;
 
     return MHDU_create_response_from_subscription(pubsub, mhdu_con, code,
-            &subscribe_cb, pubsub);
+            &subscribe_cb, NULL, pubsub);
 }
 
 int main(int argc, char **argv) {
