@@ -497,10 +497,6 @@ static int post_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
 
     MHDU_LOG("POST processing: %s", key);
 
-    if (data == NULL || size == 0) {
-        return MHD_YES;
-    }
-
     struct post_attribute *attribute;
     HASH_FIND_STR(mhdu_con->post_attributes, key, attribute);
     if (attribute == NULL) {
@@ -513,7 +509,9 @@ static int post_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
     }
 
     int rv;
-    if (filename == NULL || filename[0] == '\0') {
+    if (data == NULL || size == 0) {
+        rv = tj_buffer_appendAsString(attribute->value, "");
+    } else if (filename == NULL || filename[0] == '\0') {
         rv = tj_buffer_appendAsString(attribute->value, data);
     } else {
         rv = tj_buffer_append(attribute->value, (const tj_buffer_byte*)data,
