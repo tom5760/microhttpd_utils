@@ -112,6 +112,20 @@ static struct MHD_Response* publish_post(void *cls,
 
     MHDU_attributes_iter(mhdu_con, &publish_post_cb, &page);
 
+    const char *value;
+    size_t length;
+    MHDU_attribute_get(mhdu_con, "message", &value, &length);
+    MHDU_ERR("Testing _get.  message: %.*s", (int)length, value);
+
+    MHDU_LOG("Testing iterating by indexes");
+    for (unsigned int i = 0; i < MHDU_attribute_count(mhdu_con); i++) {
+        const char *i_key;
+        const char *i_value;
+        size_t i_length;
+        MHDU_attribute_index(mhdu_con, i, &i_key, &i_value, &i_length);
+        MHDU_ERR("%s: %.*s", i_key, (int)i_length, i_value);
+    }
+
     utstring_printf(&page, "</ul></body></html>");
 
     MHDU_publish_data(pubsub, utstring_body(&page), utstring_len(&page),

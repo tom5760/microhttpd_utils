@@ -289,9 +289,40 @@ void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
         *value = NULL;
         return;
     }
-    const char *val = tj_buffer_getAsString(attribute->value);
-    *value = val;
+    *value = tj_buffer_getAsString(attribute->value);
     *length = tj_buffer_getUsed(attribute->value);
+}
+
+unsigned int MHDU_attribute_count(const struct MHDU_Connection *mhdu_con) {
+    return HASH_COUNT(mhdu_con->post_attributes);
+}
+
+void MHDU_attribute_index(const struct MHDU_Connection *mhdu_con,
+        unsigned int index, const char **key, const char **value,
+        size_t *length) {
+    struct post_attribute *attribute;
+    struct post_attribute *tmp;
+
+    if (index >= MHDU_attribute_count(mhdu_con)) {
+        goto done;
+    }
+
+    unsigned int i = 0;
+    HASH_ITER(hh, mhdu_con->post_attributes, attribute, tmp) {
+        if (i == index) {
+            *key = attribute->key;
+            *value = tj_buffer_getAsString(attribute->value);
+            *length = tj_buffer_getUsed(attribute->value);
+            return;
+        }
+        i++;
+    }
+
+done:
+    *key = NULL;
+    *value = NULL;
+    *length = 0;
+    return;
 }
 
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,

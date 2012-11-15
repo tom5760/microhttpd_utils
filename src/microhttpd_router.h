@@ -142,6 +142,14 @@ void MHDU_attributes_iter(const struct MHDU_Connection *mhdu_con,
 void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
         const char *key, const char **value, size_t *length);
 
+/** Get the number of attributes in a request. */
+unsigned int MHDU_attribute_count(const struct MHDU_Connection *mhdu_con);
+
+/** Get a specific attribute in a request by index. */
+void MHDU_attribute_index(const struct MHDU_Connection *mhdu_con,
+        unsigned int index, const char **key, const char **value,
+        size_t *length);
+
 /** Starts the MHD daemon, setting up the router as the handler callback. */
 struct MHD_Daemon* MHDU_start_daemon(unsigned int flags, unsigned short port,
         struct MHDU_Router *router);
