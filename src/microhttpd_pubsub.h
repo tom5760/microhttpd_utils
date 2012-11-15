@@ -94,3 +94,7 @@ struct MHD_Response* MHDU_create_response_from_subscription(
  */
 int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *data,
         size_t length, enum MHD_ResponseMemoryMode respmem);
+
+/** Callback that passes data directly to client. */
+ssize_t MHDU_PubSubPassthroughCallback(void *cls, const char *data,
+        size_t data_length, size_t offset, char *buf, size_t max);

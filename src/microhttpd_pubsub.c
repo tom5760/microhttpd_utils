@@ -194,6 +194,18 @@ int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *data,
     return MHD_YES;
 }
 
+ssize_t MHDU_PubSubPassthroughCallback(void *cls, const char *data,
+        size_t data_length, size_t offset, char *buf, size_t max) {
+    size_t n = 0;
+    if (data_length < max) {
+        n = data_length;
+    } else {
+        n = max;
+    }
+    memcpy(buf, data, n);
+    return n;
+}
+
 static void destroy_pubsub(struct MHDU_PubSub *pubsub) {
     pthread_mutex_lock(&pubsub->lock);
     if (!pubsub->closed) {
