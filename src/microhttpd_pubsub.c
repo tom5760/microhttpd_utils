@@ -150,12 +150,12 @@ struct MHD_Response* MHDU_create_response_from_subscription(
         struct MHDU_PubSub *pubsub, struct MHDU_Connection *mhdu_con,
         int *code, MHDU_PubSubCallback cb, MHDU_PubSubCleanupCallback cleanup,
         void *cls) {
-    pthread_mutex_lock(&pubsub->lock);
     struct subscription *sub = create_subscription(pubsub, cb, cleanup, cls);
     if (sub == NULL) {
-        pthread_mutex_unlock(&pubsub->lock);
         return NULL;
     }
+
+    pthread_mutex_lock(&pubsub->lock);
     DL_APPEND(pubsub->subs, sub);
     pubsub->num_subs++;
     pthread_mutex_unlock(&pubsub->lock);
@@ -189,8 +189,8 @@ int MHDU_publish_data(struct MHDU_PubSub *pubsub, const char *data,
         }
         pthread_mutex_lock(&sub->lock);
         DL_APPEND(sub->queue, item);
-        pthread_cond_broadcast(&sub->cond);
         pthread_mutex_unlock(&sub->lock);
+        pthread_cond_broadcast(&sub->cond);
     }
     pthread_mutex_unlock(&pubsub->lock);
 
@@ -250,6 +250,8 @@ static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf,
         } else {
             pthread_mutex_unlock(&pubsub->lock);
         }
+    } else {
+        pthread_mutex_unlock(&sub->lock);
     }
 
     struct queue_item *item = sub->queue;
