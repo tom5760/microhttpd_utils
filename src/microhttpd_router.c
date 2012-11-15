@@ -481,8 +481,14 @@ static int post_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
                 strlen(attribute->key), attribute);
     }
 
-    if (tj_buffer_append(attribute->value, (const tj_buffer_byte*)data, size)
-            != 1) {
+    int rv;
+    if (filename == NULL || filename[0] == '\0') {
+        rv = tj_buffer_appendAsString(attribute->value, data);
+    } else {
+        rv = tj_buffer_append(attribute->value, (const tj_buffer_byte*)data,
+                              size);
+    }
+    if (rv != 1) {
         MHDU_ERR("Could not append data to POST attribute.");
         goto error;
     }
