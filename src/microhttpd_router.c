@@ -549,8 +549,14 @@ static int post_iterator_meta(struct MHDU_Connection *mhdu_con,
 
 static int item_iterator(void *cls, enum MHD_ValueKind kind, const char *key,
         const char *value) {
+    size_t value_len;
+    if (value == NULL) {
+        value_len = 0;
+    } else {
+        value_len = strlen(value);
+    }
     return post_iterator(cls, kind, key, NULL, NULL, NULL, value, 0,
-            strlen(value));
+            value_len);
 }
 
 static void handle_request_complete(void *cls,
