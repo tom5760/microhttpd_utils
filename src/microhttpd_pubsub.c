@@ -70,6 +70,7 @@ struct subscription {
     struct MHDU_PubSub *pubsub;
 
     MHDU_PubSubCallback callback;
+    MHDU_PubSubCleanupCallback cleanup;
     void *cls;
 
     /** The items in this subscription's message queue. */
@@ -107,7 +108,8 @@ static ssize_t pubsub_callback(void *cls, uint64_t pos, char *buf, size_t max);
 static void pubsub_free_callback(void *cls);
 
 static struct subscription* create_subscription(struct MHDU_PubSub *pubsub,
-        MHDU_PubSubCallback callback, void *cls);
+        MHDU_PubSubCallback callback, MHDU_PubSubCleanupCallback cleanup,
+        void *cls);
 static void destroy_subscription(struct subscription *sub);
 
 static struct queue_item* create_queue_item(struct message *message);
@@ -146,9 +148,10 @@ void MHDU_stop_pubsub(struct MHDU_PubSub *pubsub) {
 
 struct MHD_Response* MHDU_create_response_from_subscription(
         struct MHDU_PubSub *pubsub, struct MHDU_Connection *mhdu_con,
-        int *code, MHDU_PubSubCallback cb, void *cls) {
+        int *code, MHDU_PubSubCallback cb, MHDU_PubSubCleanupCallback cleanup,
+        void *cls) {
     pthread_mutex_lock(&pubsub->lock);
-    struct subscription *sub = create_subscription(pubsub, cb, cls);
+    struct subscription *sub = create_subscription(pubsub, cb, cleanup, cls);
     if (sub == NULL) {
         pthread_mutex_unlock(&pubsub->lock);
         return NULL;
@@ -275,7 +278,8 @@ static void pubsub_free_callback(void *cls) {
 }
 
 static struct subscription* create_subscription(struct MHDU_PubSub *pubsub,
-        MHDU_PubSubCallback callback, void *cls) {
+        MHDU_PubSubCallback callback, MHDU_PubSubCleanupCallback cleanup,
+        void *cls) {
     struct subscription *sub = calloc(1, sizeof(*sub));
     if (sub == NULL) {
         MHDU_ERR("Failed to allocate sub.");
@@ -284,6 +288,7 @@ static struct subscription* create_subscription(struct MHDU_PubSub *pubsub,
 
     sub->pubsub = pubsub;
     sub->callback = callback;
+    sub->cleanup = cleanup;
     sub->cls = cls;
 
     sub->lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
@@ -293,6 +298,10 @@ static struct subscription* create_subscription(struct MHDU_PubSub *pubsub,
 }
 
 static void destroy_subscription(struct subscription *sub) {
+    if (sub->cleanup != NULL) {
+        sub->cleanup(sub->cls);
+    }
+
     pthread_mutex_lock(&sub->lock);
     struct queue_item *item, *item_tmp;
     DL_FOREACH_SAFE(sub->queue, item, item_tmp) {

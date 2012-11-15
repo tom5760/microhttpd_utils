@@ -72,6 +72,8 @@ struct MHDU_PubSub;
 typedef ssize_t (*MHDU_PubSubCallback)(void *cls, const char *data,
         size_t data_length, size_t offset, char *buf, size_t max);
 
+typedef void (*MHDU_PubSubCleanupCallback)(void *cls);
+
 struct MHDU_PubSub* MHDU_start_pubsub(void);
 
 void MHDU_stop_pubsub(struct MHDU_PubSub *pubsub);
@@ -84,7 +86,8 @@ void MHDU_stop_pubsub(struct MHDU_PubSub *pubsub);
  */
 struct MHD_Response* MHDU_create_response_from_subscription(
         struct MHDU_PubSub *pubsub, struct MHDU_Connection *mhdu_con,
-        int *code, MHDU_PubSubCallback cb, void *cls);
+        int *code, MHDU_PubSubCallback cb, MHDU_PubSubCleanupCallback cleanup,
+        void *cls);
 
 /**
  * Asynchronously send data to a channel.
