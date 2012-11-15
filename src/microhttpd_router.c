@@ -287,8 +287,10 @@ void MHDU_attribute_get(const struct MHDU_Connection *mhdu_con,
     HASH_FIND_STR(mhdu_con->post_attributes, key, attribute);
     if (attribute == NULL) {
         *value = NULL;
+        return;
     }
-    *value = tj_buffer_getAsString(attribute->value);
+    const char *val = tj_buffer_getAsString(attribute->value);
+    *value = val;
     *length = tj_buffer_getUsed(attribute->value);
 }
 
